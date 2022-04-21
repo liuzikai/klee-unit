@@ -15,6 +15,15 @@
 
 #include <unwind.h>
 
+typedef uintptr_t _Unwind_Word;
+typedef intptr_t _Unwind_Sword;
+typedef uintptr_t _Unwind_Ptr;
+typedef uintptr_t _Unwind_Internal_Ptr;
+typedef uint64_t _Unwind_Exception_Class;
+
+typedef intptr_t _sleb128_t;
+typedef uintptr_t _uleb128_t;
+
 #include <klee/klee.h>
 
 // from libcxxabi
@@ -224,7 +233,7 @@ void _Unwind_SetIP(struct _Unwind_Context *context, _Unwind_Word new_value) {
                     "unsupported.err");
 }
 
-void *_Unwind_GetLanguageSpecificData(struct _Unwind_Context *context) {
+uintptr_t _Unwind_GetLanguageSpecificData(struct _Unwind_Context *context) {
   klee_report_error(__FILE__, __LINE__,
                     "_Unwind_GetLanguageSpecificData not supported",
                     "unsupported.err");

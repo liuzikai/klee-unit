@@ -30,7 +30,7 @@ set(CMAKE_USER_MAKE_RULES_OVERRIDE_C
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/c_flags_override.cmake")
 set(CMAKE_USER_MAKE_RULES_OVERRIDE_CXX
   "${CMAKE_CURRENT_SOURCE_DIR}/cmake/cxx_flags_override.cmake")
-project(KLEE CXX C)
+project(AST-KLEE-Unit CXX C)
 
 include(CheckFunctionExists)
 include(CheckLibraryExists)
