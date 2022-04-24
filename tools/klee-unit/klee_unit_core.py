@@ -1,7 +1,8 @@
 # -*- encoding: utf-8 -*-
-
+import os
 import sys
-from pycparser import c_parser, c_ast, c_generator
+import subprocess
+from pycparser import c_parser, c_ast, c_generator, parse_file
 from typing import Optional
 from enum import Enum
 from dataclasses import dataclass, field
@@ -55,11 +56,13 @@ class DriverGenerator:
         self._current_func_name: Optional[str] = None
         self._args: Optional[dict[str, _ArgumentInfo]] = None
         self._watch_ret = False
+        self._driver_name: Optional[str] = None
 
         self.reload_src()
 
     def reload_src(self) -> None:
-        self._ast = self._parser.parse(open(self._src_file, "r", encoding="utf-8").read())
+        # FIXME: -xc++ is required for Apple clang but may not work for other compilers
+        self._ast = parse_file(self._src_file, use_cpp=True, cpp_args='-xc++', parser=self._parser)
 
     def analyze_src(self) -> dict[str, str]:
         """
@@ -277,7 +280,138 @@ class DriverGenerator:
             [driver_decl]
         ))
 
-        with open(self._test_file, "a", encoding="utf-8") as f:
-            f.write(driver_src)
+        if not os.path.exists(self._test_file):
+            with open(self._test_file, "w", encoding="utf-8") as f:
+                f.write('#include "klee_unit.h"\n\n')
+                f.write(driver_src)
+        else:
+            with open(self._test_file, "a", encoding="utf-8") as f:
+                f.write("\n")
+                f.write(driver_src)
 
+        self._driver_name = driver_name
         return driver_src
+
+    def _lookup_test_driver_func(self, ast: c_ast.FileAST) -> Optional[tuple[c_ast.FuncDef, int, int]]:
+        """
+        Lookup test driver function in the AST.
+        :param ast: AST to be searched
+        :return: (func_def, start_line, end_line (exclusive))
+        """
+        for i, e in enumerate(ast.ext):
+            if type(e) is c_ast.FuncDef:
+                if e.decl and e.decl.name == self._driver_name:
+                    start_line = int(e.coord.line) - 1  # coord.line is 1-based
+                    end_line = int(ast.ext[i + 1].coord.line) - 1 if i + 1 < len(ast.ext) else None
+                    return e, start_line, end_line
+        return None
+
+    @staticmethod
+    def _try_rewrite_statement(e) -> list[c_ast.Node]:
+        if type(e) is c_ast.Decl and \
+                type(e.init) is c_ast.UnaryOp and e.init.op == "*" and \
+                type(e.init.expr) is c_ast.Cast and \
+                type((func_call := e.init.expr.expr)) is c_ast.FuncCall and \
+                type(func_call.name) is c_ast.ID and func_call.name.name == "__symbolic":
+
+            var_name = e.name
+
+            # Rewrite the function call
+            func_call.name.name = "klee_make_symbolic"
+            func_call.args.exprs.insert(0, c_ast.UnaryOp(op="&", expr=c_ast.ID(var_name)))
+            func_call.args.exprs.append(c_ast.Constant(type="string", value=f'"{var_name}"'))
+
+            # Clear the initializer
+            e.init = None
+
+            ret = [e, func_call]
+        elif type(e) is c_ast.FuncCall and type(e.name) is c_ast.ID and e.name.name == "__watch":
+            assert len(e.args.exprs) == 1 and type(e.args.exprs[0]) is c_ast.Cast
+            cast = e.args.exprs[0]
+            assert type(cast.expr) is c_ast.UnaryOp and cast.expr.op == "&" and type(cast.expr.expr) is c_ast.ID
+            var_name = cast.expr.expr.name
+
+            # Rewrite the function call
+            e.name.name = "klee_make_symbolic"
+            e.args.exprs = [c_ast.UnaryOp(op="&", expr=c_ast.ID(var_name)),
+                            c_ast.UnaryOp(op="sizeof", expr=c_ast.ID(var_name)),
+                            c_ast.Constant(type="string", value=f'"{var_name}"')]
+            ret = [e]
+        else:
+            ret = [e]
+
+        return ret
+
+    def generate_klee_driver(self) -> None:
+        if self._driver_name is None:
+            raise RuntimeError("generate_test_driver is required before generate_klee_driver")
+
+        # FIXME: -xc++ is required for Apple clang but may not work for other compilers
+        ast = parse_file(self._test_file, use_cpp=True, cpp_args='-xc++', parser=self._parser)  # substitute the macros
+        driver_func, start_line, end_line = self._lookup_test_driver_func(ast)
+        if driver_func is None:
+            raise RuntimeError("Cannot find test driver function")
+
+        # Rewrite the test driver function as main()
+        print(driver_func.coord)
+        driver_func.decl.name = "main"
+        driver_func.decl.type.type.declname = "main"
+        driver_func.decl.type.type.type.names = ["int"]
+        new_body = []
+        for e in driver_func.body.block_items:
+            new_body.extend(self._try_rewrite_statement(e))
+        driver_func.body.block_items = new_body
+
+        # driver_func.show()
+
+        # Generate KLEE test driver source code
+        klee_driver_src = self._generator.visit(driver_func)
+        # print(klee_driver_src)
+
+        # Read the original source code
+        with open(self._test_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+
+        # Replace the test driver function with KLEE test driver function
+        with open(self._test_file, "w", encoding="utf-8") as f:
+            if start_line > 0:
+                f.writelines(lines[:start_line])
+            f.write(f'#include <klee/klee.h>\n')
+            f.write(f'#include "{self._src_file}"\n\n')
+            f.write(klee_driver_src)
+            if end_line is not None:
+                f.writelines(lines[end_line:])
+
+    def run_klee(self) -> None:
+        try:
+            # Use of universal_newlines to treat all newlines as \n for Python's purpose
+            output = subprocess.check_output(
+                # FIXME: include path
+                ["clang", "-I", "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/include",
+                 "-emit-llvm", "-c", "-g", "-O0", "-disable-O0-optnone", self._test_file,
+                 "-o", os.path.splitext(self._test_file)[0] + ".bc"], universal_newlines=True)
+        except OSError as e:
+            raise RuntimeError("Unable to generate LLVM bitcode. Error: %s" % e)
+
+        print(output)
+
+
+if __name__ == '__main__':
+    session = DriverGenerator(
+        src_file="/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/examples/klee-unit/get_sign.c",
+        test_file="/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/examples/klee-unit/get_sign_test.c")
+    funcs = session.analyze_src()
+    print("Functions:", ", ".join(funcs.keys()))
+
+    session.analyze_func("get_sign")
+
+    print("Generate test driver...")
+    session.set_arg_option("x", ArgumentDriverType.SYMBOLIC)
+    session.generate_test_driver()
+
+    print("Press any key to continue...")
+    input()
+
+    session.generate_klee_driver()
+
+    session.run_klee()

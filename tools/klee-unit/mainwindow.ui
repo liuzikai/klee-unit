@@ -15,46 +15,14 @@
   </property>
   <widget class="QWidget" name="centralwidget">
    <layout class="QGridLayout" name="gridLayout">
-    <item row="1" column="0">
-     <widget class="QLabel" name="labelSrcFile">
+    <item row="2" column="0">
+     <widget class="QLabel" name="labelFunc">
       <property name="text">
-       <string>Source File</string>
+       <string>Test Function</string>
       </property>
      </widget>
     </item>
-    <item row="1" column="2">
-     <widget class="QPushButton" name="btnAnalyzeSrc">
-      <property name="text">
-       <string>Analysis File</string>
-      </property>
-     </widget>
-    </item>
-    <item row="0" column="0">
-     <widget class="QLabel" name="labelTestFile">
-      <property name="text">
-       <string>Working Test File</string>
-      </property>
-     </widget>
-    </item>
-    <item row="3" column="2">
-     <widget class="QGroupBox" name="groupRet">
-      <property name="title">
-       <string>Return Value</string>
-      </property>
-      <layout class="QVBoxLayout" name="verticalRet"/>
-     </widget>
-    </item>
-    <item row="2" column="1">
-     <widget class="QComboBox" name="comboFunc"/>
-    </item>
-    <item row="0" column="1">
-     <widget class="QLineEdit" name="editTestFile">
-      <property name="text">
-       <string>/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/examples/klee-unit/get_sign_test.c</string>
-      </property>
-     </widget>
-    </item>
-    <item row="9" column="0" colspan="3">
+    <item row="10" column="0" colspan="3">
      <widget class="QGroupBox" name="groupTestCases">
       <property name="sizePolicy">
        <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
@@ -77,6 +45,38 @@
       </widget>
      </widget>
     </item>
+    <item row="1" column="0">
+     <widget class="QLabel" name="labelSrcFile">
+      <property name="text">
+       <string>Source File</string>
+      </property>
+     </widget>
+    </item>
+    <item row="2" column="1">
+     <widget class="QComboBox" name="comboFunc"/>
+    </item>
+    <item row="0" column="1">
+     <widget class="QLineEdit" name="editTestFile">
+      <property name="text">
+       <string>/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/examples/klee-unit/get_sign_test.c</string>
+      </property>
+     </widget>
+    </item>
+    <item row="1" column="2">
+     <widget class="QPushButton" name="btnAnalyzeSrc">
+      <property name="text">
+       <string>Analysis File</string>
+      </property>
+     </widget>
+    </item>
+    <item row="3" column="2">
+     <widget class="QGroupBox" name="groupRet">
+      <property name="title">
+       <string>Return Value</string>
+      </property>
+      <layout class="QVBoxLayout" name="verticalRet"/>
+     </widget>
+    </item>
     <item row="3" column="0" colspan="2">
      <widget class="QGroupBox" name="groupArgs">
       <property name="sizePolicy">
@@ -91,17 +91,17 @@
       <layout class="QGridLayout" name="gridArgs"/>
      </widget>
     </item>
+    <item row="4" column="2">
+     <widget class="QPushButton" name="btnGenerateDriver">
+      <property name="text">
+       <string>Generate Test Driver</string>
+      </property>
+     </widget>
+    </item>
     <item row="2" column="2">
      <widget class="QPushButton" name="btnAnalyzeFunc">
       <property name="text">
        <string>Analysis Function</string>
-      </property>
-     </widget>
-    </item>
-    <item row="2" column="0">
-     <widget class="QLabel" name="labelFunc">
-      <property name="text">
-       <string>Test Function</string>
       </property>
      </widget>
     </item>
@@ -112,17 +112,17 @@
       </property>
      </widget>
     </item>
-    <item row="4" column="0" colspan="2">
-     <widget class="QCheckBox" name="checkInline">
+    <item row="0" column="0">
+     <widget class="QLabel" name="labelTestFile">
       <property name="text">
-       <string>Inline Arguments</string>
+       <string>Working Test File</string>
       </property>
      </widget>
     </item>
-    <item row="4" column="2">
-     <widget class="QPushButton" name="btnGenerateDriver">
+    <item row="5" column="2">
+     <widget class="QPushButton" name="btnGenerateKLEE">
       <property name="text">
-       <string>Generate Test Driver</string>
+       <string>Generate KLEE Driver</string>
       </property>
      </widget>
     </item>
@@ -134,7 +134,7 @@
      <x>0</x>
      <y>0</y>
      <width>887</width>
-     <height>21</height>
+     <height>24</height>
     </rect>
    </property>
   </widget>

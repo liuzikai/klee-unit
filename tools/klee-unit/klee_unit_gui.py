@@ -33,6 +33,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.btnAnalyzeSrc.clicked.connect(self.analyze_src)
         self.btnAnalyzeFunc.clicked.connect(self.analyze_selected_func)
         self.btnGenerateDriver.clicked.connect(self.generate_driver)
+        self.btnGenerateKLEE.clicked.connect(self.generate_klee)
 
         self.ret_option_group = OptionGroup(self.groupRet)
         self.ret_option_group.selection_changed.connect(self.on_ret_option_changed)
@@ -105,6 +106,10 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     @QtCore.pyqtSlot()
     def generate_driver(self):
         self.session.generate_test_driver()
+
+    @QtCore.pyqtSlot()
+    def generate_klee(self):
+        self.session.generate_klee_driver()
 
 
 if __name__ == '__main__':
