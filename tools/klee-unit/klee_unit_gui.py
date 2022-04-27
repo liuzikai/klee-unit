@@ -107,9 +107,22 @@ class MainWindow(QMainWindow, Ui_MainWindow):
     def generate_driver(self):
         self.session.generate_test_driver()
 
+    def add_test_case(self, index, vals):
+        self.tableTests.setRowCount(self.tableTests.rowCount() + 1)
+        # index_item = QTableWidgetItem(str(index))
+        # self.tableTests.setItem(self.tableTests.rowCount() - 1, 0, index_item)
+        for i, val in enumerate(vals):
+            val_item = QTableWidgetItem(str(val))
+            self.tableTests.setItem(self.tableTests.rowCount() - 1, i, val_item)
+
     @QtCore.pyqtSlot()
     def generate_klee(self):
-        self.session.generate_klee_driver()
+        var_names = self.session.generate_klee_driver()
+        self.tableTests.setColumnCount(len(var_names))
+        self.tableTests.setHorizontalHeaderLabels(var_names)
+        self.tableTests.setRowCount(0)
+
+        self.session.run_klee(self.add_test_case)
 
 
 if __name__ == '__main__':

@@ -3,10 +3,12 @@ import os
 import sys
 import subprocess
 from pycparser import c_parser, c_ast, c_generator, parse_file
-from typing import Optional
+from typing import Optional, Callable
 from enum import Enum
 from dataclasses import dataclass, field
 
+from ktest import KTest
+import struct
 
 class ArgumentDriverType(Enum):
     NONE = 0
@@ -51,25 +53,28 @@ class DriverGenerator:
         self._parser = c_parser.CParser()
         self._generator = c_generator.CGenerator()
 
-        self._ast: Optional[c_ast.FileAST] = None
+        self._src_ast: Optional[c_ast.FileAST] = None
         self._func_decls: Optional[dict[str, c_ast.FuncDecl]] = None
         self._current_func_name: Optional[str] = None
         self._args: Optional[dict[str, _ArgumentInfo]] = None
         self._watch_ret = False
         self._driver_name: Optional[str] = None
+        self._driver_ast: Optional[c_ast.FileAST] = None
+        self._watch_vars: Optional[list[str]] = None
+        self._test_cases: Optional[list[dict[str, bytes]]] = None
 
         self.reload_src()
 
     def reload_src(self) -> None:
         # FIXME: -xc++ is required for Apple clang but may not work for other compilers
-        self._ast = parse_file(self._src_file, use_cpp=True, cpp_args='-xc++', parser=self._parser)
+        self._src_ast = parse_file(self._src_file, use_cpp=True, cpp_args='-xc++', parser=self._parser)
 
     def analyze_src(self) -> dict[str, str]:
         """
         Analyze the source file.
         :return: dict of {function name: function signature}
         """
-        if self._ast is None:
+        if self._src_ast is None:
             raise RuntimeError("reload_src is required before analyze_src")
 
         class _FuncDefVisitor(c_ast.NodeVisitor):
@@ -88,7 +93,7 @@ class DriverGenerator:
         ret = {}
         self._func_decls = {}
         v = _FuncDefVisitor(ret, self._func_decls, self._generator)
-        v.visit(self._ast)
+        v.visit(self._src_ast)
         return ret
 
     def analyze_func(self, name: str) -> (list[ArgumentInfo], bool):
@@ -306,8 +311,7 @@ class DriverGenerator:
                     return e, start_line, end_line
         return None
 
-    @staticmethod
-    def _try_rewrite_statement(e) -> list[c_ast.Node]:
+    def _try_rewrite_statement(self, e) -> list[c_ast.Node]:
         if type(e) is c_ast.Decl and \
                 type(e.init) is c_ast.UnaryOp and e.init.op == "*" and \
                 type(e.init.expr) is c_ast.Cast and \
@@ -325,6 +329,8 @@ class DriverGenerator:
             e.init = None
 
             ret = [e, func_call]
+
+            self._watch_vars.append(var_name)
         elif type(e) is c_ast.FuncCall and type(e.name) is c_ast.ID and e.name.name == "__watch":
             assert len(e.args.exprs) == 1 and type(e.args.exprs[0]) is c_ast.Cast
             cast = e.args.exprs[0]
@@ -337,18 +343,26 @@ class DriverGenerator:
                             c_ast.UnaryOp(op="sizeof", expr=c_ast.ID(var_name)),
                             c_ast.Constant(type="string", value=f'"{var_name}"')]
             ret = [e]
+
+            self._watch_vars.append(var_name)
         else:
             ret = [e]
 
         return ret
 
-    def generate_klee_driver(self) -> None:
+    def generate_klee_driver(self) -> list[str]:
+        """
+        Generate KLEE driver function.
+        :return: list of watched variables
+        """
         if self._driver_name is None:
             raise RuntimeError("generate_test_driver is required before generate_klee_driver")
 
+        self._watch_vars = []
+
         # FIXME: -xc++ is required for Apple clang but may not work for other compilers
-        ast = parse_file(self._test_file, use_cpp=True, cpp_args='-xc++', parser=self._parser)  # substitute the macros
-        driver_func, start_line, end_line = self._lookup_test_driver_func(ast)
+        self._driver_ast = parse_file(self._test_file, use_cpp=True, cpp_args='-xc++', parser=self._parser)  # substitute the macros
+        driver_func, start_line, end_line = self._lookup_test_driver_func(self._driver_ast)
         if driver_func is None:
             raise RuntimeError("Cannot find test driver function")
 
@@ -359,7 +373,7 @@ class DriverGenerator:
         driver_func.decl.type.type.type.names = ["int"]
         new_body = []
         for e in driver_func.body.block_items:
-            new_body.extend(self._try_rewrite_statement(e))
+            new_body.extend(self._try_rewrite_statement(e))  # change self._watch_vars inside
         driver_func.body.block_items = new_body
 
         # driver_func.show()
@@ -379,21 +393,75 @@ class DriverGenerator:
             f.write(f'#include <klee/klee.h>\n')
             f.write(f'#include "{self._src_file}"\n\n')
             f.write(klee_driver_src)
+            f.write('void *__symbolic(unsigned long s) { (void) s; return 0; }\n')
+            f.write('void __watch(void *ptr) { (void) ptr; }\n')
+            f.write('void __let(int cond) { (void) cond; }\n')
+            # FIXME: if there is nothing in the AST after the driver, everything will be overwritten
             if end_line is not None:
                 f.writelines(lines[end_line:])
 
-    def run_klee(self) -> None:
+        return self._watch_vars
+
+    def run_klee(self, add_test_case_callback: Callable[[int, list[str]], None]) -> None:
+
+        # Generate LLVM bitcode
+        bc_filename = os.path.splitext(self._test_file)[0] + ".bc"
         try:
             # Use of universal_newlines to treat all newlines as \n for Python's purpose
             output = subprocess.check_output(
                 # FIXME: include path
                 ["clang", "-I", "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/include",
-                 "-emit-llvm", "-c", "-g", "-O0", "-disable-O0-optnone", self._test_file,
-                 "-o", os.path.splitext(self._test_file)[0] + ".bc"], universal_newlines=True)
+                 "-emit-llvm", "-c", "-g", "-O0", self._test_file,
+                 "-o", bc_filename], universal_newlines=True)
         except OSError as e:
             raise RuntimeError("Unable to generate LLVM bitcode. Error: %s" % e)
 
+        # print(output)
+
+        output_dir = f"klee-out-{self._current_func_name}"
+        if os.path.exists(output_dir):
+            os.system(f"rm -rf {output_dir}")
+
+        # Run KLEE
+        try:
+            # Use of universal_newlines to treat all newlines as \n for Python's purpose
+            output = subprocess.check_output(
+                # FIXME: include PATH
+                ["/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/cmake-build-release/bin/klee",
+                 f"-output-dir={output_dir}", bc_filename], universal_newlines=True)
+        except OSError as e:
+            raise RuntimeError("Unable to run KLEE. Error: %s" % e)
+
         print(output)
+
+        # Extract the generated test cases
+        self._test_cases = []
+        index = 1
+        while os.path.exists(filename := f"{output_dir}/test{str(index).zfill(6)}.ktest"):
+
+            # Extract bytes of watched variables
+            test_case = {}
+            ktest = KTest.fromfile(filename)
+            for name, data in ktest.objects:
+                if name in self._watch_vars:
+                    test_case[name] = data
+            self._test_cases.append(test_case)
+
+            # Format the variables
+            formated_vars = []
+            for name in self._watch_vars:
+                if name in test_case:
+                    data = test_case[name]
+                    for n, m in [(1, 'b'), (2, 'h'), (4, 'i'), (8, 'q')]:
+                        if len(data) == n:
+                            formated_vars.append(f"{struct.unpack(m, data)[0]}")
+                            break
+
+                else:
+                    RuntimeError(f"{name} is not found in {filename}")
+            add_test_case_callback(index - 1, formated_vars)
+
+            index += 1
 
 
 if __name__ == '__main__':
@@ -412,6 +480,10 @@ if __name__ == '__main__':
     print("Press any key to continue...")
     input()
 
-    session.generate_klee_driver()
+    print(session.generate_klee_driver())
 
-    session.run_klee()
+    def add_test_case(index, values):
+        print(f"Test case {index}: {', '.join(values)}")
+
+    session.run_klee(add_test_case)
+
