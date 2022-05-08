@@ -208,6 +208,11 @@ public:
   // FIXME: Move to a shared list structure (not critical).
   std::vector<std::pair<ref<const MemoryObject>, const Array *>> symbolics;
 
+  /// @brief Ordered list of watched objects: used to generate test cases.
+  //
+  // FIXME: Move to a shared list structure (not critical).
+  std::vector<std::pair<const MemoryObject*, const ObjectState*>> watchedObjs;
+
   /// @brief A set of boolean expressions
   /// the user has requested be true of a counterexample.
   ImmutableSet<ref<Expr>> cexPreferences;

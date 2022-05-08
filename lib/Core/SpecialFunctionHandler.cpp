@@ -94,6 +94,7 @@ static SpecialFunctionHandler::HandlerInfo handlerInfo[] = {
   add("klee_get_value_i64", handleGetValue, true),
   add("klee_define_fixed_object", handleDefineFixedObject, false),
   add("klee_get_obj_size", handleGetObjSize, true),
+  add("klee_watch_obj", handleWatchObj, false),
   add("klee_get_errno", handleGetErrno, true),
 #ifndef __APPLE__
   add("__errno_location", handleErrnoLocation, true),
@@ -651,6 +652,35 @@ void SpecialFunctionHandler::handleGetObjSize(ExecutionState &state,
         ConstantExpr::create(it->first.first->size,
                              executor.kmodule->targetData->getTypeSizeInBits(
                                  target->inst->getType())));
+  }
+}
+
+void SpecialFunctionHandler::handleWatchObj(ExecutionState &state,
+                                  KInstruction *target,
+                                  std::vector<ref<Expr> > &arguments) {
+  assert(arguments.size() == 2 &&
+         "invalid number of arguments to klee_watch_obj");
+
+  std::string name = arguments[1]->isZero() ? "" : readStringAtAddress(state, arguments[1]);
+
+  Executor::ExactResolutionList rl;
+  executor.resolveExact(state, arguments[0], rl, "klee_watch_obj");
+  for (Executor::ExactResolutionList::iterator it = rl.begin(),
+         ie = rl.end(); it != ie; ++it) {
+    it->second->watchedObjs.emplace_back(it->first);
+
+    if (!name.empty()) {
+      if (it->first.first->name != "unnamed" && it->first.first->name != name) {
+        klee_warning("memory object %s is renamed to %s by klee_watch_obj",
+                     it->first.first->name.c_str(), name.c_str());
+      }
+      it->first.first->name = name;
+    } else {
+      if (it->first.first->name == "unnamed") {
+        klee_warning("watched memory object (klee_watch_obj at %s) has no name",
+                     target->getSourceLocation().c_str());
+      }
+    }
   }
 }
 

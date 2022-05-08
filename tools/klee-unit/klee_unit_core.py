@@ -6,9 +6,11 @@ from pycparser import c_parser, c_ast, c_generator, parse_file
 from typing import Optional, Callable
 from enum import Enum
 from dataclasses import dataclass, field
+import tempfile
 
 from ktest import KTest
 import struct
+
 
 class ArgumentDriverType(Enum):
     NONE = 0
@@ -47,6 +49,11 @@ class DriverGenerator:
 
     def __init__(self, src_file: str, test_file: str) -> None:
         super().__init__()
+
+        # Check executables
+        print(f'Found klee... {self._get_version("klee")}')
+        print(f'Found clang... {self._get_version("clang")}')
+
         self._src_file = src_file
         self._test_file = test_file
 
@@ -63,7 +70,19 @@ class DriverGenerator:
         self._watch_vars: Optional[list[str]] = None
         self._test_cases: Optional[list[dict[str, bytes]]] = None
 
+        # Create a temporary directory for KLEE
+        self._tmp_dir = tempfile.TemporaryDirectory()
+        print("Temporary directory:", self._tmp_dir.name)
+
         self.reload_src()
+
+    @staticmethod
+    def _get_version(executable: str) -> str:
+        try:
+            version = subprocess.run([executable, "--version"], capture_output=True).stdout.decode("utf-8")
+        except FileNotFoundError as e:
+            raise RuntimeError(f"{executable} is not found in the system") from e
+        return version.splitlines(keepends=False)[0]
 
     def reload_src(self) -> None:
         # FIXME: -xc++ is required for Apple clang but may not work for other compilers
@@ -312,13 +331,10 @@ class DriverGenerator:
         return None
 
     def _try_rewrite_statement(self, e) -> list[c_ast.Node]:
-        if type(e) is c_ast.Decl and \
-                type(e.init) is c_ast.UnaryOp and e.init.op == "*" and \
-                type(e.init.expr) is c_ast.Cast and \
-                type((func_call := e.init.expr.expr)) is c_ast.FuncCall and \
-                type(func_call.name) is c_ast.ID and func_call.name.name == "__symbolic":
+        if self._is_symbolic_call(e):
 
             var_name = e.name
+            func_call = e.init.expr.expr
 
             # Rewrite the function call
             func_call.name.name = "klee_make_symbolic"
@@ -331,24 +347,47 @@ class DriverGenerator:
             ret = [e, func_call]
 
             self._watch_vars.append(var_name)
-        elif type(e) is c_ast.FuncCall and type(e.name) is c_ast.ID and e.name.name == "__watch":
+        elif self._is_watch_call(e):
             assert len(e.args.exprs) == 1 and type(e.args.exprs[0]) is c_ast.Cast
             cast = e.args.exprs[0]
             assert type(cast.expr) is c_ast.UnaryOp and cast.expr.op == "&" and type(cast.expr.expr) is c_ast.ID
             var_name = cast.expr.expr.name
 
             # Rewrite the function call
-            e.name.name = "klee_make_symbolic"
+            e.name.name = "klee_watch_obj"
             e.args.exprs = [c_ast.UnaryOp(op="&", expr=c_ast.ID(var_name)),
-                            c_ast.UnaryOp(op="sizeof", expr=c_ast.ID(var_name)),
                             c_ast.Constant(type="string", value=f'"{var_name}"')]
             ret = [e]
 
             self._watch_vars.append(var_name)
+        elif self._is_let_call(e):
+            assert len(e.args.exprs) == 1
+
+            # Rewrite the function call
+            e.name.name = "klee_assume"
+            ret = [e]
         else:
             ret = [e]
 
         return ret
+
+    @staticmethod
+    def _is_symbolic_call(e) -> bool:
+        if type(e) is c_ast.Decl:
+            if type(e.init) is c_ast.UnaryOp and e.init.op == "*":
+                if type(e.init.expr) is c_ast.Cast:
+                    if type((func_call := e.init.expr.expr)) is c_ast.FuncCall:
+                        if type(func_call.name) is c_ast.ID and func_call.name.name == "__symbolic":
+                            return True
+        return False
+
+    @staticmethod
+    def _is_watch_call(e):
+        return type(e) is c_ast.FuncCall and type(e.name) is c_ast.ID and e.name.name == "__watch"
+
+    @staticmethod
+    def _is_let_call(e):
+        return type(e) is c_ast.FuncCall and type(e.name) is c_ast.ID and e.name.name == "__let"
 
     def generate_klee_driver(self) -> list[str]:
         """
@@ -361,7 +400,8 @@ class DriverGenerator:
         self._watch_vars = []
 
         # FIXME: -xc++ is required for Apple clang but may not work for other compilers
-        self._driver_ast = parse_file(self._test_file, use_cpp=True, cpp_args='-xc++', parser=self._parser)  # substitute the macros
+        self._driver_ast = parse_file(self._test_file, use_cpp=True, cpp_args='-xc++',
+                                      parser=self._parser)  # substitute the macros
         driver_func, start_line, end_line = self._lookup_test_driver_func(self._driver_ast)
         if driver_func is None:
             raise RuntimeError("Cannot find test driver function")
@@ -418,7 +458,7 @@ class DriverGenerator:
 
         # print(output)
 
-        output_dir = f"klee-out-{self._current_func_name}"
+        output_dir = os.path.join(self._tmp_dir.name, f"klee-out-{self._current_func_name}")
         if os.path.exists(output_dir):
             os.system(f"rm -rf {output_dir}")
 
@@ -426,10 +466,9 @@ class DriverGenerator:
         try:
             # Use of universal_newlines to treat all newlines as \n for Python's purpose
             output = subprocess.check_output(
-                # FIXME: include PATH
-                ["/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/cmake-build-release/bin/klee",
+                ["klee",
                  f"-output-dir={output_dir}", bc_filename], universal_newlines=True)
-        except OSError as e:
+        except Exception as e:
             raise RuntimeError("Unable to run KLEE. Error: %s" % e)
 
         print(output)
@@ -482,8 +521,9 @@ if __name__ == '__main__':
 
     print(session.generate_klee_driver())
 
+
     def add_test_case(index, values):
         print(f"Test case {index}: {', '.join(values)}")
 
-    session.run_klee(add_test_case)
 
+    session.run_klee(add_test_case)

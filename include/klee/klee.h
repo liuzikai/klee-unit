@@ -78,6 +78,9 @@ extern "C" {
   /* called by checking code to get size of memory. */
   size_t klee_get_obj_size(void *ptr);
 
+  /* add a memory object to the generated test cases. */
+  void klee_watch_obj(void *ptr, const char *name);
+
   /* print the tree associated w/ a given expression. */
   void klee_print_expr(const char *msg, ...);
 

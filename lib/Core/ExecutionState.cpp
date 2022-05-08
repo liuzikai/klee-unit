@@ -96,6 +96,7 @@ ExecutionState::ExecutionState(const ExecutionState& state):
     symPathOS(state.symPathOS),
     coveredLines(state.coveredLines),
     symbolics(state.symbolics),
+    watchedObjs(state.watchedObjs),
     cexPreferences(state.cexPreferences),
     arrayNames(state.arrayNames),
     openMergeStack(state.openMergeStack),
@@ -161,7 +162,7 @@ bool ExecutionState::merge(const ExecutionState &b) {
   // XXX is it even possible for these to differ? does it matter? probably
   // implies difference in object states?
 
-  if (symbolics != b.symbolics)
+  if (symbolics != b.symbolics || watchedObjs != b.watchedObjs)
     return false;
 
   {
