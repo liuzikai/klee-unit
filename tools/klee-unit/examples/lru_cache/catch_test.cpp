@@ -26,33 +26,39 @@ TEST_CASE("decode_encode_address") {
     cache_destroy(c);
 }
 
-int get_sign(int x) {
-  if (x == 0)
-     return 0;
-  
-  if (x < 0)
-     return -1;
-  else 
-     return 1;
-}
-
-int add_by_sign(int x) {
-  if (x == 0)
-     return 0;
-  
-  if (x < 0)
-     return x - 1;
-  else 
-     return x + 1;
-}
+//int get_sign(int x) {
+//  if (x == 0)
+//     return 0;
+//
+//  if (x < 0)
+//     return -1;
+//  else
+//     return 1;
+//}
+//
+//int add_by_sign(int x) {
+//  if (x == 0)
+//     return 0;
+//
+//  if (x < 0)
+//     return x - 1;
+//  else
+//     return x + 1;
+//}
 
 int main()
 {
-  int x, y;
-  klee_make_symbolic(&x, sizeof(int), "x");
-  klee_make_symbolic(&y, sizeof(int), "y");
-  int ret = add_by_sign(x);
-  char c = (char) ret;
-  klee_watch_obj(&ret, "ret");
-//   klee_make_symbolic(&ret, sizeof(ret), "ret");
+  Cache *c = cache_create(4, 64, 32, LRU);
+
+  uint32_t addr, offset, set_index, tag;
+  klee_make_symbolic(&addr, sizeof(addr), "addr");
+  klee_assume(addr != 0);
+
+  decode_address(c, addr, &offset, &set_index, &tag);
+
+  klee_watch_obj(&offset, "offset");
+  klee_watch_obj(&set_index, "set_index");
+  klee_watch_obj(&tag, "tag");
+
+  cache_destroy(c);
 }
