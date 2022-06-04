@@ -7,11 +7,13 @@ from typing import Optional, Callable
 from enum import Enum
 from dataclasses import dataclass, field
 import tempfile
+import select
 
-from ktest import KTest
+from ktest import KTest, KTestError
 import struct
 
-KLEE_UNIT_INCLUDE = "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/tools/klee-unit/include"
+KLEE_INCLUDE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../../include")
+KLEE_UNIT_INCLUDE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "include")
 
 
 class ArgumentDriverType(Enum):
@@ -46,6 +48,10 @@ class _ArgumentInfo:
     option: ArgumentDriverType = ArgumentDriverType.NONE
 
 
+class VarNotFoundError(Exception):
+    pass
+
+
 class DriverGenerator:
     NONE_PLACEHOLDER = "?"
 
@@ -77,6 +83,10 @@ class DriverGenerator:
         # Create a temporary directory for KLEE
         self._tmp_dir = tempfile.TemporaryDirectory()
         print("Temporary directory:", self._tmp_dir.name)
+
+        self._bc_filename: Optional[str] = None
+        self._klee_output_dir: Optional[str] = None
+        self._klee_proc = None
 
     def set_src_file(self, src_file: str) -> None:
         self._src_file = src_file
@@ -483,73 +493,124 @@ class DriverGenerator:
 
         return self._watch_vars
 
-    def run_klee(self, add_test_case_callback: Callable[[int, list[str]], None]) -> None:
-
+    def compile_klee_driver(self) -> (str, int):
+        """
+        Compile KLEE driver file.
+        :return: (clang output, exit code)
+        """
         # Generate LLVM bitcode
-        bc_filename = os.path.splitext(self._klee_driver_file)[0] + ".bc"
+        self._bc_filename = os.path.splitext(self._klee_driver_file)[0] + ".bc"
         try:
-            # Use of universal_newlines to treat all newlines as \n for Python's purpose
-            output = subprocess.check_output(
-                # FIXME: include path
+            clang_output = subprocess.check_output(
                 ["clang",
-                 "-I", "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/include",
+                 "-I", KLEE_INCLUDE,
                  "-I", KLEE_UNIT_INCLUDE,
                  "-emit-llvm", "-c", "-g", "-O0", self._klee_driver_file,
-                 "-o", bc_filename], universal_newlines=True)
+                 "-o", self._bc_filename], universal_newlines=True)
         except OSError as e:
             raise RuntimeError("Unable to generate LLVM bitcode. Error: %s" % e)
 
-        # print(output)
+        return clang_output, 0
 
-        output_dir = os.path.join(self._tmp_dir.name, f"klee-out-{self._current_func_name}")
-        if os.path.exists(output_dir):
-            os.system(f"rm -rf {output_dir}")
+    def start_klee(self):
+        self._klee_output_dir = os.path.join(self._tmp_dir.name, f"klee-out-{self._current_func_name}")
+        if os.path.exists(self._klee_output_dir):
+            os.system(f"rm -rf {self._klee_output_dir}")
 
         # Run KLEE
+        self._test_cases = []
         try:
             # Use of universal_newlines to treat all newlines as \n for Python's purpose
-            output = subprocess.check_output(
+            self._klee_proc = subprocess.Popen(
                 ["klee",
-                 f"-output-dir={output_dir}", bc_filename], universal_newlines=True)
+                 f"--search=dfs",  # DFS to generate test cases as fast as possible
+                 f"-output-dir={self._klee_output_dir}",
+                 self._bc_filename],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # redirect stderr to stdout
+                universal_newlines=True)
         except Exception as e:
             raise RuntimeError("Unable to run KLEE. Error: %s" % e)
 
-        print(output)
+        # Set non-blocking stdout
+        os.set_blocking(self._klee_proc.stdout.fileno(), False)
 
-        # Extract the generated test cases
-        self._test_cases = []
-        index = 1
-        while os.path.exists(filename := f"{output_dir}/test{str(index).zfill(6)}.ktest"):
+    def stop_klee(self):
+        """
+        Stop KLEE and return its return code.
+        """
+        if self._klee_proc is None:
+            return
+        self._klee_proc.kill()
+        self._klee_proc.wait()
+        return self._klee_proc.returncode
 
-            # Extract bytes of watched variables
+    def is_klee_running(self) -> bool:
+        if self._klee_proc is None:
+            return False
+        return self._klee_proc.poll() is None
+
+    def get_klee_return_code(self) -> int:
+        if self._klee_proc is None:
+            return False
+        return self._klee_proc.returncode
+
+    def read_klee_output(self) -> str:
+        """
+        Non-blocking read of KLEE output.
+        """
+        return self._klee_proc.stdout.read()  # os.set_blocking(False) above
+
+    def fetch_new_klee_test_cases(self) -> list[dict]:
+        last_test_case_len = len(self._test_cases)
+
+        # Read test cases until no more
+        while os.path.exists(
+                filename := f"{self._klee_output_dir}/test{str(len(self._test_cases) + 1).zfill(6)}.ktest"):
+            # The file may be written by the KLEE at the same time, do error handling
+
             test_case = {}
-            ktest = KTest.fromfile(filename)
-            for name, data in ktest.objects:
-                if name in self._watch_vars:
-                    test_case[name] = data
+            try:
+                ktest = KTest.fromfile(filename)
+                for name, data in ktest.objects:
+                    if name in self._watch_vars:
+                        test_case[name] = data
+                for name in self._watch_vars:
+                    if name not in test_case:
+                        VarNotFoundError(f"{name} is not found in {filename}")
+            except (VarNotFoundError, KTestError) as e:
+                break  # discard the current test case
+
+            # Add the test case
             self._test_cases.append(test_case)
 
-            # Format the variables
-            formated_vars = []
-            for name in self._watch_vars:
-                if name in test_case:
-                    data = test_case[name]
-                    for n, m in [(1, 'b'), (2, 'h'), (4, 'i'), (8, 'q')]:
-                        if len(data) == n:
-                            formated_vars.append(f"{struct.unpack(m, data)[0]}")
-                            break
+        return self._test_cases[last_test_case_len:]
 
-                else:
-                    RuntimeError(f"{name} is not found in {filename}")
-            add_test_case_callback(index - 1, formated_vars)
+    def get_all_klee_test_cases(self) -> list[dict]:
+        return self._test_cases
 
-            index += 1
+    def format_data(self, data: bytes, in_hex: bool) -> str:
+        """
+        Format the data in hexadecimal.
+        """
+        UNPACK_FORMAT = {
+            1: 'b',
+            2: 'h',
+            4: 'i',
+            8: 'q'
+        }
+        value = struct.unpack(UNPACK_FORMAT[len(data)], data)[0]
+        if in_hex:
+            return hex(value)
+        else:
+            return str(value)
 
 
 if __name__ == '__main__':
-    session = DriverGenerator(
-        src_file="/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/examples/klee-unit/get_sign.c",
-        test_file="/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/examples/klee-unit/get_sign_test.c")
+    session = DriverGenerator()
+    session.set_src_file("/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/examples/klee-unit/get_sign.c")
+    session.set_test_file(
+        "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/examples/klee-unit/get_sign_test.c")
     funcs = session.analyze_src()
     print("Functions:", ", ".join(funcs.keys()))
 
@@ -569,4 +630,4 @@ if __name__ == '__main__':
         print(f"Test case {index}: {', '.join(values)}")
 
 
-    session.run_klee(add_test_case)
+    session.start_klee(add_test_case)

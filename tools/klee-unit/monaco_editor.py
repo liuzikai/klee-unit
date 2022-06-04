@@ -65,12 +65,15 @@ class EditorBridge(BaseBridge):
 
 
 class MonacoEditorWidget(QtWebEngineWidgets.QWebEngineView):
+
     code_changed = QtCore.pyqtSignal(str)
     language_changed = QtCore.pyqtSignal(str)
     theme_changed = QtCore.pyqtSignal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._has_initialized = False
+
         channel = QtWebChannel.QWebChannel(self)
         self.page().setWebChannel(channel)
 
@@ -80,37 +83,33 @@ class MonacoEditorWidget(QtWebEngineWidgets.QWebEngineView):
         filename = os.path.join(RESOURCE_DIR, "monaco-editor.html")
         self.load(QtCore.QUrl.fromLocalFile(filename))
 
-        self.bridge.initialized.connect(self.handle_initialized)
+        self.bridge.initialized.connect(self._initialized)
         self.bridge.valueChanged.connect(lambda: self.code_changed.emit(self.bridge.value))
         self.bridge.languageChanged.connect(lambda: self.language_changed.emit(self.bridge.language))
         self.bridge.themeChanged.connect(lambda: self.theme_changed.emit(self.bridge.theme))
+
+        while not self._has_initialized:
+            QtCore.QCoreApplication.processEvents()
+
+    @QtCore.pyqtSlot()
+    def _initialized(self) -> None:
+        self._has_initialized = True
 
     @property
     def bridge(self):
         return self._bridge
 
-    def handle_initialized(self):
-        code = """#include <iostream>
-#include <cstdio>
-#include <cstring>
-using namespace std;
-
-int main() {
-    return 0;
-}"""
-        self.set_language("cpp")
-        self.set_theme("vs-bright")
-        self.set_code(code)
-
     def set_language(self, language: str):
-        # Do not use self.bridge.value = code or self.bridge.setValue(code)
         self.bridge.send_to_js("language", language)
+        self.bridge.language = language  # dummy, not sending anything to JS
 
     def set_theme(self, theme: str):
         self.bridge.send_to_js("theme", theme)
+        self.bridge.theme = theme  # dummy, not sending anything to JS
 
-    def set_code(self, code: str):
-        self.bridge.send_to_js("value", code)
+    def set_text(self, text: str):
+        self.bridge.send_to_js("value", text)
+        self.bridge.value = text  # dummy, not sending anything to JS
 
     def get_language(self) -> str:
         return self.bridge.language
@@ -118,7 +117,7 @@ int main() {
     def get_theme(self) -> str:
         return self.bridge.theme
 
-    def get_code(self) -> str:
+    def get_text(self) -> str:
         return self.bridge.value
 
 
