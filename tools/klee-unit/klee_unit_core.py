@@ -11,6 +11,8 @@ import tempfile
 from ktest import KTest
 import struct
 
+KLEE_UNIT_INCLUDE = "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/tools/klee-unit/include"
+
 
 class ArgumentDriverType(Enum):
     NONE = 0
@@ -47,15 +49,17 @@ class _ArgumentInfo:
 class DriverGenerator:
     NONE_PLACEHOLDER = "?"
 
-    def __init__(self, src_file: str, test_file: str) -> None:
+    def __init__(self) -> None:
         super().__init__()
 
         # Check executables
         print(f'Found klee... {self._get_version("klee")}')
         print(f'Found clang... {self._get_version("clang")}')
 
-        self._src_file = src_file
-        self._test_file = test_file
+        self._src_file: Optional[str] = None
+        self._test_file: Optional[str] = None
+        self._tmp_test_file: Optional[str] = None
+        self._klee_driver_file: Optional[str] = None
 
         self._parser = c_parser.CParser()
         self._generator = c_generator.CGenerator()
@@ -74,7 +78,11 @@ class DriverGenerator:
         self._tmp_dir = tempfile.TemporaryDirectory()
         print("Temporary directory:", self._tmp_dir.name)
 
-        self.reload_src()
+    def set_src_file(self, src_file: str) -> None:
+        self._src_file = src_file
+
+    def set_test_file(self, test_file: str) -> None:
+        self._test_file = test_file
 
     @staticmethod
     def _get_version(executable: str) -> str:
@@ -84,17 +92,21 @@ class DriverGenerator:
             raise RuntimeError(f"{executable} is not found in the system") from e
         return version.splitlines(keepends=False)[0]
 
-    def reload_src(self) -> None:
-        # FIXME: -xc++ is required for Apple clang but may not work for other compilers
-        self._src_ast = parse_file(self._src_file, use_cpp=True, cpp_args='-xc++', parser=self._parser)
-
     def analyze_src(self) -> dict[str, str]:
         """
         Analyze the source file.
         :return: dict of {function name: function signature}
         """
-        if self._src_ast is None:
-            raise RuntimeError("reload_src is required before analyze_src")
+
+        # Check if the source file is set
+        if self._src_file is None:
+            raise RuntimeError("Source file is not set")
+
+        # Check if the source file exists
+        if not os.path.exists(self._src_file):
+            raise RuntimeError(f"Source file {self._src_file} does not exist")
+
+        self._src_ast = parse_file(self._src_file, use_cpp=True, cpp_args='-xc++', parser=self._parser)
 
         class _FuncDefVisitor(c_ast.NodeVisitor):
 
@@ -177,11 +189,14 @@ class DriverGenerator:
 
     def set_arg_option(self, name: str, option: ArgumentDriverType) -> None:
         if self._args is None:
-            raise RuntimeError("analyze_func is required before set_arg_option")
+            raise RuntimeError("The function is not analyzed yet")
 
         self._args[name].option = option
 
     def set_watch_ret(self, watch: bool) -> None:
+        if self._args is None:
+            raise RuntimeError("The function is not analyzed yet")
+
         self._watch_ret = watch
 
     @staticmethod
@@ -211,8 +226,12 @@ class DriverGenerator:
         )
 
     def generate_test_driver(self) -> str:
+        # Check if the test file is set
+        if self._test_file is None:
+            raise RuntimeError("Test file is not set")
+
         if self._current_func_name is None or self._args is None:
-            raise RuntimeError("analyze_func is required before generate_test_driver")
+            raise RuntimeError("Analyze the function before generating test driver")
 
         driver_body_item = []
         arg_ids = []
@@ -394,13 +413,33 @@ class DriverGenerator:
         Generate KLEE driver function.
         :return: list of watched variables
         """
+
+        # Check if the test driver function is already generated
         if self._driver_name is None:
-            raise RuntimeError("generate_test_driver is required before generate_klee_driver")
+            raise RuntimeError("Generate test driver before generating KLEE driver.")
+
+        # Check if the test file is set and exists
+        if not self._test_file:
+            raise RuntimeError("Test file is not set")
+        if not os.path.exists(self._test_file):
+            raise RuntimeError(f"Test file {self._test_file} does not exist")
 
         self._watch_vars = []
 
+        self._tmp_test_file = os.path.join(self._tmp_dir.name, os.path.basename(self._test_file))
+
+        TEMP_TEST_FILE_PREFIX_LINES = [
+            '#include "klee_unit.h"'
+        ]
+
+        # Append the header to the front of the test file anyway
+        with open(self._tmp_test_file, "w", encoding="utf-8") as f:
+            f.write('\n'.join(TEMP_TEST_FILE_PREFIX_LINES) + '\n' + open(self._test_file, "r", encoding="utf-8").read())
+
         # FIXME: -xc++ is required for Apple clang but may not work for other compilers
-        self._driver_ast = parse_file(self._test_file, use_cpp=True, cpp_args='-xc++',
+        self._driver_ast = parse_file(self._tmp_test_file, use_cpp=True,
+                                      cpp_args=['-xc++',
+                                                "-I" + KLEE_UNIT_INCLUDE],
                                       parser=self._parser)  # substitute the macros
         driver_func, start_line, end_line = self._lookup_test_driver_func(self._driver_ast)
         if driver_func is None:
@@ -427,11 +466,13 @@ class DriverGenerator:
             lines = f.readlines()
 
         # Replace the test driver function with KLEE test driver function
-        with open(self._test_file, "w", encoding="utf-8") as f:
+        self._klee_driver_file = os.path.join(self._tmp_dir.name, "klee_" + os.path.basename(self._test_file))
+        with open(self._klee_driver_file, "w", encoding="utf-8") as f:
+            start_line -= len(TEMP_TEST_FILE_PREFIX_LINES)
             if start_line > 0:
                 f.writelines(lines[:start_line])
             f.write(f'#include <klee/klee.h>\n')
-            f.write(f'#include "{self._src_file}"\n\n')
+            f.write(f'#include "{os.path.abspath(self._src_file)}"\n\n')
             f.write(klee_driver_src)
             f.write('void *__symbolic(unsigned long s) { (void) s; return 0; }\n')
             f.write('void __watch(void *ptr) { (void) ptr; }\n')
@@ -445,13 +486,15 @@ class DriverGenerator:
     def run_klee(self, add_test_case_callback: Callable[[int, list[str]], None]) -> None:
 
         # Generate LLVM bitcode
-        bc_filename = os.path.splitext(self._test_file)[0] + ".bc"
+        bc_filename = os.path.splitext(self._klee_driver_file)[0] + ".bc"
         try:
             # Use of universal_newlines to treat all newlines as \n for Python's purpose
             output = subprocess.check_output(
                 # FIXME: include path
-                ["clang", "-I", "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/include",
-                 "-emit-llvm", "-c", "-g", "-O0", self._test_file,
+                ["clang",
+                 "-I", "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/include",
+                 "-I", KLEE_UNIT_INCLUDE,
+                 "-emit-llvm", "-c", "-g", "-O0", self._klee_driver_file,
                  "-o", bc_filename], universal_newlines=True)
         except OSError as e:
             raise RuntimeError("Unable to generate LLVM bitcode. Error: %s" % e)

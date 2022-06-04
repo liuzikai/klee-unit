@@ -233,7 +233,7 @@ void _Unwind_SetIP(struct _Unwind_Context *context, _Unwind_Word new_value) {
                     "unsupported.err");
 }
 
-uintptr_t _Unwind_GetLanguageSpecificData(struct _Unwind_Context *context) {
+void *_Unwind_GetLanguageSpecificData(struct _Unwind_Context *context) {
   klee_report_error(__FILE__, __LINE__,
                     "_Unwind_GetLanguageSpecificData not supported",
                     "unsupported.err");

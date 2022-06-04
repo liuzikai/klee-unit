@@ -7,8 +7,8 @@
 //
 
 #define CATCH_CONFIG_MAIN
+#include "klee/klee.h"
 #include <catch.hpp>
-#include <klee/klee.h>
 
 void klee_make_symbolic(void *array, size_t nbytes, const char *name) {
 

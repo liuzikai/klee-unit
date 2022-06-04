@@ -1,0 +1,1 @@
+#define CATCH_CONFIG_MAIN#include "../../harness/catch.hpp"#include "get_sign.c"TEST_CASE("= 0") {    REQUIRE(get_sign(0) == 0);}

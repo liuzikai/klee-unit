@@ -1,3 +1,6 @@
+#ifndef __KLEE_UNIT_HEADER_KLEE_DUMMY
+#define __KLEE_UNIT_HEADER_KLEE_DUMMY
+
 #include <stdint.h>
 #include <stddef.h>
 
@@ -53,4 +56,6 @@ void klee_watch_obj(void *ptr, const char *name) {}
 
 #ifdef __cplusplus
 }
+#endif
+
 #endif

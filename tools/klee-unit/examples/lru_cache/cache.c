@@ -36,8 +36,10 @@ Cache *cache_create(int way_count, int set_count, int block_size_in_bytes, Repla
     c->sets = malloc(sizeof(Cache_Set) * c->set_count);
     for (size_t i = 0; i < c->set_count; i++) {
         c->sets[i].ways = malloc(sizeof(Cache_Block) * c->way_count);
-        memset(c->sets[i].ways, 0, sizeof(Cache_Block) * c->way_count);
+//        memset(c->sets[i].ways, 0, sizeof(Cache_Block) * c->way_count);
         for (size_t j = 0; j < c->way_count; j++) {
+          c->sets[i].ways[j].valid = c->sets[i].ways[j].dirty = 0;
+          c->sets[i].ways[j].tag = 0;
             c->sets[i].ways[j].data = malloc(sizeof(uint32_t) * c->block_size_in_words);
         }
     }
