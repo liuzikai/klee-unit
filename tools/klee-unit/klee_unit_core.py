@@ -7,13 +7,20 @@ from typing import Optional, Callable
 from enum import Enum
 from dataclasses import dataclass, field
 import tempfile
-import select
+import copy
 
 from ktest import KTest, KTestError
 import struct
 
-KLEE_INCLUDE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../../include")
-KLEE_UNIT_INCLUDE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "include")
+CURRENT_DIR = os.path.dirname(os.path.realpath(__file__))
+KLEE_INCLUDE = os.path.join(CURRENT_DIR, "../../include")
+KLEE_UNIT_INCLUDE = os.path.join(CURRENT_DIR, "include")
+FAKE_LIBC_INCLUDE = os.path.join(CURRENT_DIR, "include/fake_libc_include")
+
+KLEE_HEADER_FILENAME = os.path.join(KLEE_INCLUDE, "klee/klee.h")
+KLEE_UNIT_HEADER_FILENAME = os.path.join(KLEE_UNIT_INCLUDE, "klee_unit.h")
+KLEE_DUMMY_FILENAME = os.path.join(KLEE_UNIT_INCLUDE, "klee_dummy.h")
+CATCH_DUMMY_FILENAME = os.path.join(KLEE_UNIT_INCLUDE, "catch_dummy.hpp")
 
 
 class ArgumentDriverType(Enum):
@@ -52,7 +59,7 @@ class VarNotFoundError(Exception):
     pass
 
 
-class DriverGenerator:
+class KLEEUnitSession:
     NONE_PLACEHOLDER = "?"
 
     def __init__(self) -> None:
@@ -61,9 +68,14 @@ class DriverGenerator:
         # Check executables
         print(f'Found klee... {self._get_version("klee")}')
         print(f'Found clang... {self._get_version("clang")}')
+        print(f'Found llvm-dis... {self._get_version("llvm-dis")}')
 
+        self._cmake_mode = False
         self._src_file: Optional[str] = None
+        self._project_dir: Optional[str] = None
+        self._target: Optional[str] = None
         self._test_file: Optional[str] = None
+        self._cmake_build_dir: Optional[str] = None
         self._tmp_test_file: Optional[str] = None
         self._klee_driver_file: Optional[str] = None
 
@@ -77,6 +89,7 @@ class DriverGenerator:
         self._watch_ret = False
         self._driver_name: Optional[str] = None
         self._driver_ast: Optional[c_ast.FileAST] = None
+        self._heading_lines = None
         self._watch_vars: Optional[list[str]] = None
         self._test_cases: Optional[list[dict[str, bytes]]] = None
 
@@ -88,11 +101,21 @@ class DriverGenerator:
         self._klee_output_dir: Optional[str] = None
         self._klee_proc = None
 
+        self._driver_func_ast_copy: Optional[c_ast.FileAST] = None
+
     def set_src_file(self, src_file: str) -> None:
-        self._src_file = src_file
+        self._src_file = os.path.abspath(src_file)
 
     def set_test_file(self, test_file: str) -> None:
-        self._test_file = test_file
+        self._test_file = os.path.abspath(test_file)
+
+    def set_single_file_mode(self) -> None:
+        self._cmake_mode = False
+
+    def set_cmake_mode(self, project_dir: str, target: str) -> None:
+        self._cmake_mode = True
+        self._project_dir = os.path.abspath(project_dir)
+        self._target = target
 
     @staticmethod
     def _get_version(executable: str) -> str:
@@ -101,6 +124,32 @@ class DriverGenerator:
         except FileNotFoundError as e:
             raise RuntimeError(f"{executable} is not found in the system") from e
         return version.splitlines(keepends=False)[0]
+
+    def run_cmake(self) -> (int, str):
+        if self._project_dir is None:
+            raise RuntimeError("Project directory is not set")
+
+        self._cmake_build_dir = os.path.join(self._tmp_dir.name, "build_klee_unit")
+        if not os.path.exists(self._cmake_build_dir):
+            os.makedirs(self._cmake_build_dir, exist_ok=True)
+
+        cmds = ["cmake",
+                f"-DCMAKE_C_FLAGS='-include \"{CATCH_DUMMY_FILENAME}\" -include \"{KLEE_DUMMY_FILENAME}\" -include \"{KLEE_UNIT_HEADER_FILENAME}\" -include \"{KLEE_HEADER_FILENAME}\"'",
+                f"-DCMAKE_CXX_FLAGS='-include \"{CATCH_DUMMY_FILENAME}\" -include \"{KLEE_DUMMY_FILENAME}\" -include \"{KLEE_UNIT_HEADER_FILENAME}\" -include \"{KLEE_HEADER_FILENAME}\"'",
+                self._project_dir]
+        proc = subprocess.run(
+            cmds,
+            cwd=self._cmake_build_dir,
+            env=dict(os.environ, **{
+                "CC": "wllvm",
+                "CXX": "wllvm++",
+                "WLLVM_CONFIGURE_ONLY": "1",
+                "LLVM_COMPILER": "clang",
+            }),
+            capture_output=True,
+            universal_newlines=True)
+
+        return proc.returncode, "+ " + " ".join(cmds) + "\n" + proc.stdout
 
     def analyze_src(self) -> dict[str, str]:
         """
@@ -116,7 +165,12 @@ class DriverGenerator:
         if not os.path.exists(self._src_file):
             raise RuntimeError(f"Source file {self._src_file} does not exist")
 
-        self._src_ast = parse_file(self._src_file, use_cpp=True, cpp_args='-xc++', parser=self._parser)
+        self._src_ast = parse_file(self._src_file, use_cpp=True, cpp_args=[
+            '-xc++',
+            f'-I{FAKE_LIBC_INCLUDE}',
+        ], parser=self._parser)
+
+        self._src_ast.show()
 
         class _FuncDefVisitor(c_ast.NodeVisitor):
 
@@ -127,9 +181,11 @@ class DriverGenerator:
                 self.decls = decls
                 self.generator = generator
 
-            def visit_FuncDecl(self, node: c_ast.FuncDecl):
-                self.names[node.type.declname] = self.generator.visit_FuncDecl(node)
-                self.decls[node.type.declname] = node
+            def visit_Decl(self, node: c_ast.Decl):
+                if isinstance(node.type, c_ast.FuncDecl):
+                    func_name = node.name
+                    self.names[func_name] = self.generator.visit_FuncDecl(node.type)
+                    self.decls[func_name] = node.type
 
         ret = {}
         self._func_decls = {}
@@ -336,6 +392,7 @@ class DriverGenerator:
         if not os.path.exists(self._test_file):
             with open(self._test_file, "w", encoding="utf-8") as f:
                 f.write('#include "klee_unit.h"\n\n')
+                f.write('#include "catch.hpp"\n\n')
                 f.write(driver_src)
         else:
             with open(self._test_file, "a", encoding="utf-8") as f:
@@ -359,7 +416,7 @@ class DriverGenerator:
                     return e, start_line, end_line
         return None
 
-    def _try_rewrite_statement(self, e) -> list[c_ast.Node]:
+    def _rewrite_statement_to_klee(self, e) -> list[c_ast.Node]:
         if self._is_symbolic_call(e):
 
             var_name = e.name
@@ -424,11 +481,9 @@ class DriverGenerator:
         :return: list of watched variables
         """
 
-        # Check if the test driver function is already generated
+        # Sanity check
         if self._driver_name is None:
             raise RuntimeError("Generate test driver before generating KLEE driver.")
-
-        # Check if the test file is set and exists
         if not self._test_file:
             raise RuntimeError("Test file is not set")
         if not os.path.exists(self._test_file):
@@ -436,24 +491,49 @@ class DriverGenerator:
 
         self._watch_vars = []
 
-        self._tmp_test_file = os.path.join(self._tmp_dir.name, os.path.basename(self._test_file))
+        # if not self._cmake_mode:
+        #     self._tmp_test_file = os.path.join(self._tmp_dir.name, os.path.basename(self._test_file))
+        #
+        #     TEMP_TEST_FILE_PREFIX_LINES = [
+        #         '#include "klee_unit.h"',
+        #         f'#include "{CATCH_DUMMY_FILENAME}"',
+        #         # f'#include "{KLEE_DUMMY_FILENAME}"',
+        #     ]
+        #
+        #     # Append the header to the front of the test file anyway
+        #     with open(self._tmp_test_file, "w", encoding="utf-8") as f:
+        #         f.write('\n'.join(TEMP_TEST_FILE_PREFIX_LINES) + '\n' + open(self._test_file, "r", encoding="utf-8").read())
 
-        TEMP_TEST_FILE_PREFIX_LINES = [
-            '#include "klee_unit.h"'
-        ]
-
-        # Append the header to the front of the test file anyway
-        with open(self._tmp_test_file, "w", encoding="utf-8") as f:
-            f.write('\n'.join(TEMP_TEST_FILE_PREFIX_LINES) + '\n' + open(self._test_file, "r", encoding="utf-8").read())
+        self._tmp_test_file = self._test_file
 
         # FIXME: -xc++ is required for Apple clang but may not work for other compilers
         self._driver_ast = parse_file(self._tmp_test_file, use_cpp=True,
                                       cpp_args=['-xc++',
-                                                "-I" + KLEE_UNIT_INCLUDE],
+                                                f"-I{KLEE_UNIT_INCLUDE}",
+                                                f"-I{FAKE_LIBC_INCLUDE}",
+                                                f"-include{CATCH_DUMMY_FILENAME}",
+                                                f"-include{KLEE_UNIT_HEADER_FILENAME}",
+                                                ],
                                       parser=self._parser)  # substitute the macros
+
+        # Lookup the function
         driver_func, start_line, end_line = self._lookup_test_driver_func(self._driver_ast)
         if driver_func is None:
             raise RuntimeError("Cannot find test driver function")
+        # start_line -= len(TEMP_TEST_FILE_PREFIX_LINES)
+
+        # Make a deep copy of the AST
+        self._driver_func_ast_copy = copy.deepcopy(driver_func)
+
+        # Read the original source code
+        with open(self._test_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        if start_line > 0:
+            self._heading_lines = lines[:start_line]
+        else:
+            self._heading_lines = None
+
+        driver_func.show()
 
         # Rewrite the test driver function as main()
         print(driver_func.coord)
@@ -462,55 +542,89 @@ class DriverGenerator:
         driver_func.decl.type.type.type.names = ["int"]
         new_body = []
         for e in driver_func.body.block_items:
-            new_body.extend(self._try_rewrite_statement(e))  # change self._watch_vars inside
+            new_body.extend(self._rewrite_statement_to_klee(e))  # change self._watch_vars inside
         driver_func.body.block_items = new_body
-
         # driver_func.show()
 
         # Generate KLEE test driver source code
         klee_driver_src = self._generator.visit(driver_func)
-        # print(klee_driver_src)
 
-        # Read the original source code
-        with open(self._test_file, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+        if not self._cmake_mode:
+            # Replace the test driver function with KLEE test driver function
+            self._klee_driver_file = os.path.join(self._tmp_dir.name, "klee_" + os.path.basename(self._test_file))
+            with open(self._klee_driver_file, "w", encoding="utf-8") as f:
+                if self._heading_lines is not None:
+                    f.writelines(self._heading_lines)
+                f.write(f'#include <klee/klee.h>\n')
+                f.write(f'#include "{os.path.abspath(self._src_file)}"\n\n')
+                f.write(klee_driver_src)
+                f.write('void *__symbolic(unsigned long s) { (void) s; return 0; }\n')
+                f.write('void __watch(void *ptr) { (void) ptr; }\n')
+                f.write('void __let(int cond) { (void) cond; }\n')
+                # FIXME: if there is nothing in the AST after the driver, everything will be overwritten
+                if end_line is not None:
+                    f.writelines(lines[end_line:])
 
-        # Replace the test driver function with KLEE test driver function
-        self._klee_driver_file = os.path.join(self._tmp_dir.name, "klee_" + os.path.basename(self._test_file))
-        with open(self._klee_driver_file, "w", encoding="utf-8") as f:
-            start_line -= len(TEMP_TEST_FILE_PREFIX_LINES)
-            if start_line > 0:
-                f.writelines(lines[:start_line])
-            f.write(f'#include <klee/klee.h>\n')
-            f.write(f'#include "{os.path.abspath(self._src_file)}"\n\n')
-            f.write(klee_driver_src)
-            f.write('void *__symbolic(unsigned long s) { (void) s; return 0; }\n')
-            f.write('void __watch(void *ptr) { (void) ptr; }\n')
-            f.write('void __let(int cond) { (void) cond; }\n')
-            # FIXME: if there is nothing in the AST after the driver, everything will be overwritten
-            if end_line is not None:
-                f.writelines(lines[end_line:])
+        else:
+            # Replace the test driver in place
+            self._klee_driver_file = self._test_file
+            with open(self._klee_driver_file, "w", encoding="utf-8") as f:
+                if self._heading_lines is not None:
+                    f.writelines(self._heading_lines)
+                f.write(klee_driver_src)
+                # FIXME: if there is nothing in the AST after the driver, everything will be overwritten
+                if end_line is not None:
+                    f.writelines(lines[end_line:])
 
         return self._watch_vars
 
-    def compile_klee_driver(self) -> (str, int):
+    def compile_klee_driver(self) -> (int, str):
         """
         Compile KLEE driver file.
         :return: (clang output, exit code)
         """
-        # Generate LLVM bitcode
-        self._bc_filename = os.path.splitext(self._klee_driver_file)[0] + ".bc"
-        try:
-            clang_output = subprocess.check_output(
+        if not self._cmake_mode:
+            # Generate LLVM bitcode with clang
+            self._bc_filename = os.path.splitext(self._klee_driver_file)[0] + ".bc"
+            proc = subprocess.run(
                 ["clang",
                  "-I", KLEE_INCLUDE,
                  "-I", KLEE_UNIT_INCLUDE,
+                 "-include", CATCH_DUMMY_FILENAME,
+                 "-include", KLEE_DUMMY_FILENAME,
                  "-emit-llvm", "-c", "-g", "-O0", self._klee_driver_file,
-                 "-o", self._bc_filename], universal_newlines=True)
-        except OSError as e:
-            raise RuntimeError("Unable to generate LLVM bitcode. Error: %s" % e)
+                 "-o", self._bc_filename],
+                capture_output=True,
+                universal_newlines=True)
 
-        return clang_output, 0
+            return proc.returncode, proc.stdout
+
+        else:
+            # Generate LLVM bitcode with wllvm
+            make_proc = subprocess.run(
+                ["make", f"{self._target}"],
+                cwd=self._cmake_build_dir,
+                env=dict(os.environ, **{
+                    "LLVM_COMPILER": "clang",
+                }),
+                capture_output=True,
+                universal_newlines=True)
+            if make_proc.returncode != 0:
+                return make_proc.returncode, make_proc.stdout
+
+            # Extract the bitcode file
+            # FIXME: the executable may not be in the root level of the build directory
+            self._bc_filename = os.path.join(self._cmake_build_dir, self._target) + ".bc"
+            extract_bc_proc = subprocess.run(
+                ["extract-bc", f"{self._target}"],
+                cwd=self._cmake_build_dir,
+                env=dict(os.environ, **{
+                    "LLVM_COMPILER": "clang",
+                }),
+                shell=True,
+                capture_output=True,
+                universal_newlines=True)
+            return extract_bc_proc.returncode, make_proc.stdout + "\n" + extract_bc_proc.stdout
 
     def start_klee(self):
         self._klee_output_dir = os.path.join(self._tmp_dir.name, f"klee-out-{self._current_func_name}")
@@ -523,12 +637,15 @@ class DriverGenerator:
             # Use of universal_newlines to treat all newlines as \n for Python's purpose
             self._klee_proc = subprocess.Popen(
                 ["klee",
-                 f"--search=dfs",  # DFS to generate test cases as fast as possible
+                 "--search=dfs",  # DFS to generate test cases as fast as possible
                  f"-output-dir={self._klee_output_dir}",
+                 "--optimize",
+                 "--solver-backend=z3",
                  self._bc_filename],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # redirect stderr to stdout
-                universal_newlines=True)
+                # universal_newlines=True  # not compatible with os.set_blocking(False)
+            )
         except Exception as e:
             raise RuntimeError("Unable to run KLEE. Error: %s" % e)
 
@@ -559,7 +676,11 @@ class DriverGenerator:
         """
         Non-blocking read of KLEE output.
         """
-        return self._klee_proc.stdout.read()  # os.set_blocking(False) above
+        read = self._klee_proc.stdout.read()  # os.set_blocking(False) above
+        if read:
+            return read.decode("utf-8")
+        else:
+            return ""
 
     def fetch_new_klee_test_cases(self) -> list[dict]:
         last_test_case_len = len(self._test_cases)
@@ -605,12 +726,69 @@ class DriverGenerator:
         else:
             return str(value)
 
+    def remove_test_driver_from_test_file(self):
+        with open(self._test_file, "w", encoding="utf-8") as f:
+            if self._heading_lines is not None:
+                f.writelines(self._heading_lines)
+
+    def _rewrite_statement_to_catch2(self, e, values: dict) -> list[c_ast.Node]:
+        if self._is_symbolic_call(e):
+            var_name = e.name
+
+            # Rewrite
+            e.init = c_ast.Constant(type=e.type.type, value=f'{values[var_name]}')
+
+            ret = [e]
+
+            self._watch_vars.append(var_name)
+        elif self._is_watch_call(e):
+            assert len(e.args.exprs) == 1 and type(e.args.exprs[0]) is c_ast.Cast
+            cast = e.args.exprs[0]
+            var_name = cast.expr.expr.name
+
+            # Rewrite the function call
+            e.name.name = "REQUIRE"
+            e.args.exprs = [c_ast.BinaryOp(op="==", left=c_ast.ID(var_name),
+                                           # XXX: int type is not correct, but may not matter for code generation?
+                                           right=c_ast.Constant(type=c_ast.IdentifierType(['int']),
+                                                                value=f'{values[var_name]}'))]
+            ret = [e]
+
+            self._watch_vars.append(var_name)
+        elif self._is_let_call(e):
+            assert len(e.args.exprs) == 1
+
+            # Rewrite the function call
+            e.name.name = "ASSERT"
+            ret = [e]
+        else:
+            ret = [e]
+
+        return ret
+
+    def generate_catch2_case(self, name: str, values: dict):
+        """
+        Generate a Catch2 test case.
+        """
+        func = copy.deepcopy(self._driver_func_ast_copy)
+        body = []
+        for e in func.body.block_items:
+            body.extend(self._rewrite_statement_to_catch2(e, values))
+        compound = c_ast.Compound(body)
+
+        with open(self._test_file, "a", encoding="utf-8") as f:
+            f.write('\nTEST_CASE("' + name + '")\n')
+            f.write(self._generator.visit(compound))
+
 
 if __name__ == '__main__':
-    session = DriverGenerator()
-    session.set_src_file("/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/examples/klee-unit/get_sign.c")
+    session = KLEEUnitSession()
+    # session.set_src_file("/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/tools/klee-unit/examples/lru_cache/cache.h")
+    session.set_src_file(
+        "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/tools/klee-unit/examples/get_sign/get_sign.c")
+
     session.set_test_file(
-        "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/examples/klee-unit/get_sign_test.c")
+        "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/tools/klee-unit/examples/lru_cache/cache_foo_unit.cpp")
     funcs = session.analyze_src()
     print("Functions:", ", ".join(funcs.keys()))
 

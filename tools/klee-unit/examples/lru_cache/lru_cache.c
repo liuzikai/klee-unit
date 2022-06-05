@@ -4,7 +4,7 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include "cache.h"
+#include "lru_cache.h"
 #include "cache_private.h"
 #include "shell.h"
 

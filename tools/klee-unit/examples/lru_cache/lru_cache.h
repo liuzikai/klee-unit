@@ -5,6 +5,10 @@
 #ifndef _CACHE_H
 #define _CACHE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 typedef struct Cache Cache;
@@ -25,5 +29,9 @@ int cache_read_32(Cache *cache, uint32_t address, uint32_t *value_ptr);
 int cache_write_32(Cache *cache, uint32_t address, uint32_t value);
 
 #define CACHE_MISS_CYCLE  50
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // _CACHE_H

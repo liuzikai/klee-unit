@@ -1,8 +1,8 @@
 import sys
 import os
-from typing import Optional, List
+from typing import Optional
 
-from klee_unit_core import DriverGenerator, ArgumentDriverType
+from klee_unit_core import KLEEUnitSession, ArgumentDriverType
 
 from PyQt6 import QtGui, QtWidgets, QtCore
 from PyQt6.QtWidgets import *
@@ -31,7 +31,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         # self.setWindowIcon(QtGui.QIcon('res/meta_logo.jpeg'))
 
         try:
-            self.session = DriverGenerator()
+            self.session = KLEEUnitSession()
         except Exception as e:
             # Show error message in a dialog
             msg = QMessageBox()
@@ -42,10 +42,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             sys.exit(1)
 
         self.boxCMake.setVisible(False)
-        self.radioSingle.clicked.connect(lambda: self.boxCMake.setVisible(False))
-        self.radioCMake.clicked.connect(lambda: self.boxCMake.setVisible(True))
-        self.splitter.setSizes([2147483647, 2147483647])
+        self.radioSingle.clicked.connect(self.switch_to_single_file_mode)
+        self.radioCMake.clicked.connect(self.switch_to_cmake_mode)
+        self.splitterH.setSizes([2147483647, 2147483647])
 
+        self.btnRunCMake.clicked.connect(self.run_cmake)
         self.btnAnalyzeSrc.clicked.connect(self.analyze_src)
         self.btnAnalyzeFunc.clicked.connect(self.analyze_selected_func)
         self.btnGenerateDriver.clicked.connect(self.generate_driver)
@@ -53,16 +54,19 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.btnStopKLEE.clicked.connect(self.stop_klee)
         self.radioDec.clicked.connect(lambda _: self.load_test_cases())
         self.radioHex.clicked.connect(lambda _: self.load_test_cases())
+        self.btnTranslateCatch2.clicked.connect(self.translate_catch2_cases)
 
         self.editTestFile.textChanged.connect(lambda: self.session.set_test_file(self.editTestFile.text()))
         self.ignore_next_code_change = False
         self.session.set_test_file(self.editTestFile.text())
         self.btnReloadTestFile.clicked.connect(self.on_reload_test_file_click)
-        self.start_console_mode()
+        self.btnSaveTestFile.clicked.connect(self.on_save_timer_timeout)
+        self.testEditor.set_language("cpp")
         self.testEditor.code_changed.connect(self.on_code_changed)
-        self.ignore_next_code_change = True
-        self.testEditor.set_text(INTRODUCTION_TEXT)
+        self.logEditor.set_language("txt")
+        self.logEditor.set_text(INTRODUCTION_TEXT)
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.switch_to_single_file_mode()
 
         self.ret_option_group = OptionGroup(self.groupRet)
         self.ret_option_group.selection_changed.connect(self.on_ret_option_changed)
@@ -76,7 +80,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         # Timer to add some delay before saving the test file
         self.klee_fetch_timer = QtCore.QTimer()
-        self.klee_fetch_timer.setInterval(200)
+        self.klee_fetch_timer.setInterval(500)
         self.klee_fetch_timer.timeout.connect(self.on_klee_fetch_timer_timeout)
         self.klee_fetch_timer.setSingleShot(False)
 
@@ -91,49 +95,75 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         msg_box.setWindowTitle(title)
         msg_box.exec()
 
-    def start_code_editing_mode(self):
-        self.testEditor.set_language("cpp")
-        self.lblAutoSave.setVisible(True)
-
-    def start_console_mode(self):
-        self.testEditor.set_language("txt")
-        self.lblAutoSave.setVisible(False)
-
-    def is_code_editing_mode(self):
-        return self.lblAutoSave.isVisible()
-
     def reload_test_file(self) -> None:
-        self.ignore_next_code_change = True
-        with open(self.editTestFile.text(), 'r', encoding="utf-8") as f:
-            self.testEditor.set_text(f.read())
+        if self.editTestFile.text() != "":
+            try:
+                with open(self.editTestFile.text(), 'r', encoding="utf-8") as f:
+                    self.ignore_next_code_change = True
+                    self.testEditor.set_text(f.read())
+            except FileNotFoundError:
+                self.statusbar.showMessage("Test file {} not found".format(self.editTestFile.text()))
 
     def on_reload_test_file_click(self) -> None:
         self.reload_test_file()
-        self.start_code_editing_mode()
 
     def focusInEvent(self, event: QtGui.QFocusEvent) -> None:
-        if self.is_code_editing_mode():
-            # Reload the test file when the window gets focus if auto saving is enabled
-            self.reload_test_file()
+        self.reload_test_file()
 
     @QtCore.pyqtSlot()
     def on_save_timer_timeout(self) -> None:
-        if self.is_code_editing_mode():
+        if self.editTestFile.text() != "":
             # Save the file
             with open(self.editTestFile.text(), 'w', encoding="utf-8") as f:
                 f.write(self.testEditor.get_text())
-            self.statusbar.showMessage("Test file saved", 1000)
+            self.statusbar.showMessage(f"Test file saved to {self.editTestFile.text()}", 1000)
 
     # Start the delay timer when editor code is changed
     def on_code_changed(self) -> None:
-        if self.is_code_editing_mode():
-            if self.ignore_next_code_change:
-                self.ignore_next_code_change = False
-            else:
-                self.auto_save_timer.start()
+        if self.ignore_next_code_change:
+            self.ignore_next_code_change = False
+        else:
+            self.auto_save_timer.start()
+
+    @QtCore.pyqtSlot()
+    def switch_to_single_file_mode(self) -> None:
+        self.boxCMake.setVisible(False)
+        self.btnAnalyzeSrc.setEnabled(True)
+        for widget in [self.btnAnalyzeFunc, self.btnGenerateDriver, self.btnStartKLEE, self.btnStopKLEE,
+                       self.btnTranslateCatch2]:
+            widget.setEnabled(False)
+
+    @QtCore.pyqtSlot()
+    def switch_to_cmake_mode(self) -> None:
+        self.boxCMake.setVisible(True)
+        self.btnAnalyzeSrc.setEnabled(False)
+        for widget in [self.btnAnalyzeFunc, self.btnGenerateDriver, self.btnStartKLEE, self.btnStopKLEE,
+                       self.btnTranslateCatch2]:
+            widget.setEnabled(False)
+
+    @QtCore.pyqtSlot()
+    def run_cmake(self) -> None:
+
+        self.session.set_cmake_mode(self.editCMakeDir.text(), self.editCMakeTarget.text())
+
+        # try:
+        cmake_return_code, cmake_output = self.session.run_cmake()
+        # except Exception as e:
+        #     self.statusbar.showMessage("Failed to run CMake: {}".format(e))
+        #     return
+
+        self.logEditor.set_text(f"-- cmake output:\n{cmake_output}\n"
+                                f"-- cmake exited with {cmake_return_code}\n\n")
+        if cmake_return_code == 0:
+            self.statusbar.showMessage("CMake exited with success")
+            self.btnAnalyzeSrc.setEnabled(True)
 
     @QtCore.pyqtSlot()
     def analyze_src(self):
+
+        if self.radioSingle.isChecked():
+            self.session.set_single_file_mode()
+
         try:
             self.session.set_src_file(self.editSrcFile.text())
             self.comboFunc.clear()
@@ -143,6 +173,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.statusbar.showMessage("Fail to analysis source file: {}".format(e))
         else:
             self.statusbar.showMessage("Successfully analyzed source file")
+            self.btnAnalyzeFunc.setEnabled(True)
 
     @QtCore.pyqtSlot()
     def analyze_selected_func(self):
@@ -197,6 +228,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         else:
             self.ret_option_group.add_button("None", False)  # default option
 
+        self.statusbar.showMessage("Analyzed function: {}".format(self.comboFunc.currentText()))
+        self.btnGenerateDriver.setEnabled(True)
+
     @QtCore.pyqtSlot(int, object)
     def on_arg_option_changed(self, index: int, data: object):
         name, option = data
@@ -220,9 +254,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.statusbar.showMessage(str(e))
         else:
             self.statusbar.showMessage("Successfully generated test driver")
+            self.btnStartKLEE.setEnabled(True)
 
         self.reload_test_file()
-        self.start_code_editing_mode()
 
     def load_test_cases(self):
         test_cases = self.session.get_all_klee_test_cases()
@@ -245,6 +279,9 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         else:
             self.statusbar.showMessage("Successfully generated KLEE driver")
 
+        if self.radioCMake.isChecked():
+            self.reload_test_file()
+
         # Clear the test case table
         self.tableTests.setColumnCount(1 + len(var_names))
         self.tableTests.setHorizontalHeaderLabels(["Name"] + var_names)
@@ -252,18 +289,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.var_column[var_name] = i + 1
         self.tableTests.setRowCount(0)
 
-        # Change the editor to the output console and stop auto saving
-        self.start_console_mode()
-
         # Compile KLEE driver
-        try:
-            clang_output, clang_return_code = self.session.compile_klee_driver()
-        except Exception as e:
-            self.statusbar.showMessage("Failed to compile KLEE driver: {}".format(e))
+        clang_return_code, clang_output = self.session.compile_klee_driver()
+        if clang_return_code != 0:
+            self.statusbar.showMessage("Failed to compile KLEE driver")
             return
-        self.testEditor.set_text(f"-- clang output:\n{clang_output}\n"
-                                 f"-- clang exited with {clang_return_code}\n\n"
-                                 f"-- KLEE output:\n")
+        self.logEditor.set_text(f"-- Compile output:\n{clang_output}\n"
+                                f"-- exited with {clang_return_code}\n\n"
+                                f"-- KLEE output:\n")
 
         # Start KLEE
         try:
@@ -271,11 +304,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         except Exception as e:
             self.statusbar.showMessage("Fail to start KLEE: {}".format(e))
             return
+        self.progressBar.setVisible(True)
         self.klee_fetch_timer.start()
+        self.btnStopKLEE.setEnabled(True)
 
-    def append_editor_code(self, code: str) -> None:
-        self.ignore_next_code_change = True
-        self.testEditor.set_text(self.testEditor.get_text() + code)
+    def append_log(self, code: str) -> None:
+        self.logEditor.set_text(self.logEditor.get_text() + code)
 
     @QtCore.pyqtSlot()
     def on_klee_fetch_timer_timeout(self):
@@ -285,7 +319,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         # Fetch output
         new_output = self.session.read_klee_output()
         if len(new_output) > 0:
-            self.append_editor_code(new_output)
+            self.append_log(new_output)
 
         # Fetch new test cases
         if len(self.session.fetch_new_klee_test_cases()) > 0:
@@ -295,13 +329,39 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         if not still_running:
             self.klee_fetch_timer.stop()
             msg = "KLEE exited with code {}".format(self.session.get_klee_return_code())
-            self.append_editor_code("\n-- {}\n".format(msg))
+            self.append_log("\n-- {}\n".format(msg))
             self.statusbar.showMessage(msg)
+            self.btnTranslateCatch2.setEnabled(True)
+            self.progressBar.setVisible(False)
 
     @QtCore.pyqtSlot()
     def stop_klee(self):
         self.session.stop_klee()
         self.on_klee_fetch_timer_timeout()
+
+    @QtCore.pyqtSlot()
+    def translate_catch2_cases(self):
+        try:
+            self.session.remove_test_driver_from_test_file()
+        except Exception as e:
+            self.statusbar.showMessage(str(e))
+
+        for i in range(self.tableTests.rowCount()):
+            name_item = self.tableTests.item(i, 0)
+            if name_item is None or name_item.text() == "":
+                continue  # skip discarded test case
+
+            values = {}
+            for var_name in self.var_column.keys():
+                values[var_name] = self.tableTests.item(i, self.var_column[var_name]).text()
+
+            try:
+                self.session.generate_catch2_case(name_item.text(), values)
+            except Exception as e:
+                self.statusbar.showMessage("Failed to generate Catch2 test case: {}".format(e))
+                return
+
+        self.reload_test_file()
 
 
 if __name__ == '__main__':

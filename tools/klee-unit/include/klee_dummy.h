@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-#define NO_OPT __attribute__((noinline)) /* do not use static or functions are renamed despite extern "C" */
+#define NO_OPT static __attribute__((noinline)) /* do not use static or functions are renamed despite extern "C" */
 
 NO_OPT void klee_make_symbolic(void *array, size_t nbytes, const char *name) {}
 
@@ -48,9 +48,9 @@ NO_OPT void klee_close_merge() {}
 
 NO_OPT size_t klee_get_obj_size(void *ptr) { return 0; }
 
-unsigned klee_is_symbolic(uintptr_t x) { return 0; }
+NO_OPT unsigned klee_is_symbolic(uintptr_t x) { return 0; }
 
-void klee_watch_obj(void *ptr, const char *name) {}
+NO_OPT void klee_watch_obj(void *ptr, const char *name) {}
 
 #undef NO_OPT
 
