@@ -1,6 +1,6 @@
-// The dummy include replacing catch.hpp to make the whole program compile and runnable by KLEE
+/* The dummy include replacing catch.hpp to make the whole program compile and runnable by KLEE */
 
-// Use the SAME guard macro as catch.hpp to replace it
+/* Use the SAME guard macro as catch.hpp to replace it */
 #ifndef TWOBLUECUBES_SINGLE_INCLUDE_CATCH_HPP_INCLUDED
 #define TWOBLUECUBES_SINGLE_INCLUDE_CATCH_HPP_INCLUDED
 

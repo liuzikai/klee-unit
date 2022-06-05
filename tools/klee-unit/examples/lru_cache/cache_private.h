@@ -1,21 +1,17 @@
-//
-// Created by liuzikai on 10/5/21.
-//
-
 #ifndef _CACHE_PRIVATE_H
 #define _CACHE_PRIVATE_H
 
 #include <stdint.h>
 
 typedef struct {
-    uint8_t valid;      // 1 for valid
-    uint8_t dirty;      // 1 for dirty
+    uint8_t valid;      /* 1 for valid */
+    uint8_t dirty;      /* 1 for dirty */
     uint32_t tag;
-    uint32_t* data;     // indexed with offset
+    uint32_t* data;     /* indexed with offset */
 } Cache_Block;
 
 typedef struct {
-    Cache_Block* ways;  // 0 is the most recently used
+    Cache_Block* ways;  /* 0 is the most recently used */
 } Cache_Set;
 
 struct Cache {
@@ -39,4 +35,4 @@ uint32_t encode_address(Cache *c, uint32_t offset, uint32_t set_index, uint32_t 
 
 void move_block_to_front(Cache_Block *block, Cache_Block *head);
 
-#endif // _CACHE_PRIVATE_H
+#endif

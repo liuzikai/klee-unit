@@ -100,16 +100,13 @@ class MonacoEditorWidget(QtWebEngineWidgets.QWebEngineView):
         return self._bridge
 
     def set_language(self, language: str):
-        self.bridge.send_to_js("language", language)
-        self.bridge.language = language  # dummy, not sending anything to JS
+        self.bridge.send_to_js("language", language)  # do not use self.bridge.language
 
     def set_theme(self, theme: str):
-        self.bridge.send_to_js("theme", theme)
-        self.bridge.theme = theme  # dummy, not sending anything to JS
+        self.bridge.send_to_js("theme", theme)  # do not use self.bridge.theme
 
     def set_text(self, text: str):
-        self.bridge.send_to_js("value", text)
-        self.bridge.value = text  # dummy, not sending anything to JS
+        self.bridge.send_to_js("value", text)  # do not use self.bridge.value
 
     def get_language(self) -> str:
         return self.bridge.language
@@ -128,7 +125,13 @@ if __name__ == "__main__":
 
     app = QtWidgets.QApplication(sys.argv)
 
+
+    @QtCore.pyqtSlot()
+    def code_changed(code: str):
+        print("code changed:", code)
+
     w = MonacoEditorWidget()
+    w.code_changed.connect(code_changed)
     w.show()
 
     sys.exit(app.exec())

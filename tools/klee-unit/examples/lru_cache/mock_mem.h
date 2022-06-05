@@ -1,7 +1,3 @@
-//
-// Created by Zikai Liu on 5/23/22.
-//
-
 #ifndef MOCK_MEM_H
 #define MOCK_MEM_H
 

@@ -1,7 +1,3 @@
-//
-// Created by liuzikai on 10/5/21.
-//
-
 #ifndef _CACHE_H
 #define _CACHE_H
 
@@ -34,4 +30,4 @@ int cache_write_32(Cache *cache, uint32_t address, uint32_t value);
 }
 #endif
 
-#endif // _CACHE_H
+#endif

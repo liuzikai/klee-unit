@@ -134,8 +134,8 @@ class KLEEUnitSession:
             os.makedirs(self._cmake_build_dir, exist_ok=True)
 
         cmds = ["cmake",
-                f"-DCMAKE_C_FLAGS='-include \"{CATCH_DUMMY_FILENAME}\" -include \"{KLEE_DUMMY_FILENAME}\" -include \"{KLEE_UNIT_HEADER_FILENAME}\" -include \"{KLEE_HEADER_FILENAME}\"'",
-                f"-DCMAKE_CXX_FLAGS='-include \"{CATCH_DUMMY_FILENAME}\" -include \"{KLEE_DUMMY_FILENAME}\" -include \"{KLEE_UNIT_HEADER_FILENAME}\" -include \"{KLEE_HEADER_FILENAME}\"'",
+                f"-DCMAKE_C_FLAGS='-include \"{CATCH_DUMMY_FILENAME}\" -include \"{KLEE_UNIT_HEADER_FILENAME}\" -include \"{KLEE_HEADER_FILENAME}\"'",
+                f"-DCMAKE_CXX_FLAGS='-include \"{CATCH_DUMMY_FILENAME}\" -include \"{KLEE_UNIT_HEADER_FILENAME}\" -include \"{KLEE_HEADER_FILENAME}\"'",
                 self._project_dir]
         proc = subprocess.run(
             cmds,
@@ -166,11 +166,11 @@ class KLEEUnitSession:
             raise RuntimeError(f"Source file {self._src_file} does not exist")
 
         self._src_ast = parse_file(self._src_file, use_cpp=True, cpp_args=[
-            '-xc++',
+            # '-xc++',
             f'-I{FAKE_LIBC_INCLUDE}',
         ], parser=self._parser)
 
-        self._src_ast.show()
+        # self._src_ast.show()
 
         class _FuncDefVisitor(c_ast.NodeVisitor):
 
@@ -276,7 +276,7 @@ class KLEEUnitSession:
         )
 
     @staticmethod
-    def _create_var_decl(param: c_ast.Decl, name: str, type: c_ast.Node, init_val: c_ast.Node) -> c_ast.Decl:
+    def _create_var_decl(param: c_ast.Decl, name: str, type: c_ast.Node, init_val: Optional[c_ast.Node]) -> c_ast.Decl:
         return c_ast.Decl(
             name=name,
             quals=param.quals, align=param.align, storage=param.storage, funcspec=param.funcspec,
@@ -300,6 +300,7 @@ class KLEEUnitSession:
             raise RuntimeError("Analyze the function before generating test driver")
 
         driver_body_item = []
+        watched_item = []
         arg_ids = []
 
         # Generate argument drivers
@@ -309,11 +310,13 @@ class KLEEUnitSession:
             if info.option == ArgumentDriverType.NONE:
                 var_decl = self._create_var_decl(param, arg_name, param.type, c_ast.ID(self.NONE_PLACEHOLDER))
                 driver_body_item.append(var_decl)
+                arg_ids.append(c_ast.ID(arg_name))
             elif info.option == ArgumentDriverType.SYMBOLIC:
                 var_decl = self._create_var_decl(param, arg_name, param.type,
                                                  # trick to generate type substitution
                                                  self._create_func_call("SYMBOLIC", [param.type]))
                 driver_body_item.append(var_decl)
+                arg_ids.append(c_ast.ID(arg_name))
             elif info.option == ArgumentDriverType.SYMBOLIC_ARRAY:
                 if info.type == _ArgumentType.FIXED_LENGTH_ARRAY:
                     dim = param.type.dim
@@ -329,7 +332,7 @@ class KLEEUnitSession:
                                                  # notice the double .type to extract inner type
                                                  self._create_func_call("SYMBOLIC_ARRAY", [param.type.type, dim]))
                 driver_body_item.append(var_decl)
-
+                arg_ids.append(c_ast.ID(arg_name))
             elif info.option == ArgumentDriverType.EXPANDED_ARRAY:
                 assert param.type.dim is not None and type(param.type.dim) is c_ast.Constant
                 count = int(param.type.dim.value)
@@ -340,17 +343,23 @@ class KLEEUnitSession:
                                                      range(count)
                                                  ]))
                 driver_body_item.append(var_decl)
-
+                arg_ids.append(c_ast.ID(arg_name))
             elif info.option == ArgumentDriverType.EXPANDED_STRUCT:
                 raise NotImplementedError("EXPANDED_STRUCT is not supported yet")
             elif info.option == ArgumentDriverType.PTR_OUT:
-                raise NotImplementedError("PTR_OUT is not supported yet")
+                var_decl = self._create_var_decl(param, arg_name, param.type.type, None)
+                driver_body_item.append(var_decl)
+                watched_item.append(arg_name)
+                arg_ids.append(c_ast.UnaryOp(op="&", expr=c_ast.ID(arg_name)))
             elif info.option == ArgumentDriverType.PTR_IN_OUT:
-                raise NotImplementedError("PTR_IN_OUT is not supported yet")
+                var_decl = self._create_var_decl(param, arg_name, param.type.type,
+                                                 # trick to generate type substitution
+                                                 self._create_func_call("SYMBOLIC", [param.type]))
+                driver_body_item.append(var_decl)
+                watched_item.append(arg_name)
+                arg_ids.append(c_ast.UnaryOp(op="&", expr=c_ast.ID(arg_name)))
             else:
                 raise RuntimeError("Unknown argument driver type: {}".format(info.option))
-
-            arg_ids.append(c_ast.ID(arg_name))
 
         # Generate return value driver
         ret_type_id = self._func_decls[self._current_func_name].type.type.names[0]
@@ -367,6 +376,9 @@ class KLEEUnitSession:
             )
             driver_body_item.append(ret_decl)
             driver_body_item.append(self._create_func_call("WATCH", [c_ast.ID("ret")]))
+
+        for arg_name in watched_item:
+            driver_body_item.append(self._create_func_call("WATCH", [c_ast.ID(arg_name)]))
 
         # Generate test driver function
         driver_name = f"klee_unit_test_{self._current_func_name}"
@@ -402,7 +414,7 @@ class KLEEUnitSession:
         self._driver_name = driver_name
         return driver_src
 
-    def _lookup_test_driver_func(self, ast: c_ast.FileAST) -> Optional[tuple[c_ast.FuncDef, int, int]]:
+    def _lookup_test_driver_func(self, ast: c_ast.FileAST) -> tuple[Optional[c_ast.FuncDef], int, int]:
         """
         Lookup test driver function in the AST.
         :param ast: AST to be searched
@@ -414,7 +426,7 @@ class KLEEUnitSession:
                     start_line = int(e.coord.line) - 1  # coord.line is 1-based
                     end_line = int(ast.ext[i + 1].coord.line) - 1 if i + 1 < len(ast.ext) else None
                     return e, start_line, end_line
-        return None
+        return None, 0, 0
 
     def _rewrite_statement_to_klee(self, e) -> list[c_ast.Node]:
         if self._is_symbolic_call(e):
@@ -491,29 +503,15 @@ class KLEEUnitSession:
 
         self._watch_vars = []
 
-        # if not self._cmake_mode:
-        #     self._tmp_test_file = os.path.join(self._tmp_dir.name, os.path.basename(self._test_file))
-        #
-        #     TEMP_TEST_FILE_PREFIX_LINES = [
-        #         '#include "klee_unit.h"',
-        #         f'#include "{CATCH_DUMMY_FILENAME}"',
-        #         # f'#include "{KLEE_DUMMY_FILENAME}"',
-        #     ]
-        #
-        #     # Append the header to the front of the test file anyway
-        #     with open(self._tmp_test_file, "w", encoding="utf-8") as f:
-        #         f.write('\n'.join(TEMP_TEST_FILE_PREFIX_LINES) + '\n' + open(self._test_file, "r", encoding="utf-8").read())
-
         self._tmp_test_file = self._test_file
 
-        # FIXME: -xc++ is required for Apple clang but may not work for other compilers
         self._driver_ast = parse_file(self._tmp_test_file, use_cpp=True,
-                                      cpp_args=['-xc++',
-                                                f"-I{KLEE_UNIT_INCLUDE}",
-                                                f"-I{FAKE_LIBC_INCLUDE}",
-                                                f"-include{CATCH_DUMMY_FILENAME}",
-                                                f"-include{KLEE_UNIT_HEADER_FILENAME}",
-                                                ],
+                                      cpp_args=[
+                                          f"-I{KLEE_UNIT_INCLUDE}",
+                                          f"-I{FAKE_LIBC_INCLUDE}",
+                                          f"-include{CATCH_DUMMY_FILENAME}",
+                                          f"-include{KLEE_UNIT_HEADER_FILENAME}",
+                                      ],
                                       parser=self._parser)  # substitute the macros
 
         # Lookup the function
@@ -533,7 +531,7 @@ class KLEEUnitSession:
         else:
             self._heading_lines = None
 
-        driver_func.show()
+        # driver_func.show()
 
         # Rewrite the test driver function as main()
         print(driver_func.coord)
@@ -571,6 +569,7 @@ class KLEEUnitSession:
             with open(self._klee_driver_file, "w", encoding="utf-8") as f:
                 if self._heading_lines is not None:
                     f.writelines(self._heading_lines)
+                f.write(f'#include "{KLEE_DUMMY_FILENAME}"\n')
                 f.write(klee_driver_src)
                 # FIXME: if there is nothing in the AST after the driver, everything will be overwritten
                 if end_line is not None:
@@ -607,7 +606,8 @@ class KLEEUnitSession:
                 env=dict(os.environ, **{
                     "LLVM_COMPILER": "clang",
                 }),
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 universal_newlines=True)
             if make_proc.returncode != 0:
                 return make_proc.returncode, make_proc.stdout
@@ -616,15 +616,18 @@ class KLEEUnitSession:
             # FIXME: the executable may not be in the root level of the build directory
             self._bc_filename = os.path.join(self._cmake_build_dir, self._target) + ".bc"
             extract_bc_proc = subprocess.run(
-                ["extract-bc", f"{self._target}"],
+                [f"extract-bc {self._target}"],
                 cwd=self._cmake_build_dir,
                 env=dict(os.environ, **{
                     "LLVM_COMPILER": "clang",
                 }),
                 shell=True,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 universal_newlines=True)
-            return extract_bc_proc.returncode, make_proc.stdout + "\n" + extract_bc_proc.stdout
+
+            # extract-bc does not output anything, so just return the return code
+            return extract_bc_proc.returncode, make_proc.stdout
 
     def start_klee(self):
         self._klee_output_dir = os.path.join(self._tmp_dir.name, f"klee-out-{self._current_func_name}")

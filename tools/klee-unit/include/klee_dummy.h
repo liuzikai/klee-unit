@@ -8,11 +8,11 @@
 extern "C" {
 #endif
 
-#define NO_OPT static __attribute__((noinline)) /* do not use static or functions are renamed despite extern "C" */
+#define NO_OPT __attribute__((noinline)) /* do not use static or functions are renamed despite extern "C" */
 
 NO_OPT void klee_make_symbolic(void *array, size_t nbytes, const char *name) {}
 
-NO_OPT void klee_silent_exit(int x) {}
+NO_OPT void klee_silent_exit(int x) { while(1) {} }
 
 NO_OPT uintptr_t klee_choose(uintptr_t n) { return n; }
 
@@ -36,7 +36,7 @@ NO_OPT int klee_range(int begin, int end, const char *name) { return 0; }
 
 NO_OPT void klee_prefer_cex(void *object, uintptr_t condition) {}
 
-NO_OPT void klee_abort() {}
+NO_OPT void klee_abort() { while(1) {} }
 
 NO_OPT void klee_print_expr(const char *msg, ...) {}
 

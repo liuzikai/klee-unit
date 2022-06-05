@@ -55,10 +55,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.radioDec.clicked.connect(lambda _: self.load_test_cases())
         self.radioHex.clicked.connect(lambda _: self.load_test_cases())
         self.btnTranslateCatch2.clicked.connect(self.translate_catch2_cases)
+        self.progressBar.setVisible(False)
 
-        self.editTestFile.textChanged.connect(lambda: self.session.set_test_file(self.editTestFile.text()))
+        self.editTestFile.editTextChanged.connect(lambda: self.session.set_test_file(self.editTestFile.currentText()))
         self.ignore_next_code_change = False
-        self.session.set_test_file(self.editTestFile.text())
+        self.session.set_test_file(self.editTestFile.currentText())
         self.btnReloadTestFile.clicked.connect(self.on_reload_test_file_click)
         self.btnSaveTestFile.clicked.connect(self.on_save_timer_timeout)
         self.testEditor.set_language("cpp")
@@ -96,13 +97,13 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         msg_box.exec()
 
     def reload_test_file(self) -> None:
-        if self.editTestFile.text() != "":
+        if self.editTestFile.currentText() != "":
             try:
-                with open(self.editTestFile.text(), 'r', encoding="utf-8") as f:
+                with open(self.editTestFile.currentText(), 'r', encoding="utf-8") as f:
                     self.ignore_next_code_change = True
                     self.testEditor.set_text(f.read())
             except FileNotFoundError:
-                self.statusbar.showMessage("Test file {} not found".format(self.editTestFile.text()))
+                self.statusbar.showMessage("Test file {} not found".format(self.editTestFile.currentText()))
 
     def on_reload_test_file_click(self) -> None:
         self.reload_test_file()
@@ -112,11 +113,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
     @QtCore.pyqtSlot()
     def on_save_timer_timeout(self) -> None:
-        if self.editTestFile.text() != "":
+        if self.editTestFile.currentText() != "":
             # Save the file
-            with open(self.editTestFile.text(), 'w', encoding="utf-8") as f:
+            with open(self.editTestFile.currentText(), 'w', encoding="utf-8") as f:
                 f.write(self.testEditor.get_text())
-            self.statusbar.showMessage(f"Test file saved to {self.editTestFile.text()}", 1000)
+            self.statusbar.showMessage(f"Test file saved to {self.editTestFile.currentText()}", 3000)
 
     # Start the delay timer when editor code is changed
     def on_code_changed(self) -> None:
@@ -165,7 +166,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.session.set_single_file_mode()
 
         try:
-            self.session.set_src_file(self.editSrcFile.text())
+            self.session.set_src_file(self.editSrcFile.currentText())
             self.comboFunc.clear()
             for key, signature in self.session.analyze_src().items():
                 self.comboFunc.addItem(signature, key)
@@ -275,6 +276,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             var_names = self.session.generate_klee_driver()
         except Exception as e:
             self.statusbar.showMessage("Fail to generate KLEE driver: {}".format(e))
+            self.save_test_file()  # revert changes
             return
         else:
             self.statusbar.showMessage("Successfully generated KLEE driver")
@@ -291,12 +293,14 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
         # Compile KLEE driver
         clang_return_code, clang_output = self.session.compile_klee_driver()
-        if clang_return_code != 0:
-            self.statusbar.showMessage("Failed to compile KLEE driver")
-            return
         self.logEditor.set_text(f"-- Compile output:\n{clang_output}\n"
                                 f"-- exited with {clang_return_code}\n\n"
                                 f"-- KLEE output:\n")
+        if clang_return_code != 0:
+            self.statusbar.showMessage("Failed to compile KLEE driver")
+            self.save_test_file()  # revert changes
+            self.reload_test_file()
+            return
 
         # Start KLEE
         try:
@@ -353,7 +357,11 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
             values = {}
             for var_name in self.var_column.keys():
-                values[var_name] = self.tableTests.item(i, self.var_column[var_name]).text()
+                item = self.tableTests.item(i, self.var_column[var_name])
+                if item is None:
+                    self.statusbar.showMessage("Missing {} in row i, why?".format(var_name, i))
+                    return
+                values[var_name] = item.text()
 
             try:
                 self.session.generate_catch2_case(name_item.text(), values)

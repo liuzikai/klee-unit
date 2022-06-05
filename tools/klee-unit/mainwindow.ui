@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1035</width>
+    <width>1093</width>
     <height>754</height>
    </rect>
   </property>
@@ -39,8 +39,62 @@
           <property name="title">
            <string>Configuration</string>
           </property>
-          <layout class="QGridLayout" name="gridLayout_3">
-           <item row="1" column="0" colspan="2">
+          <layout class="QVBoxLayout" name="verticalLayout_6">
+           <item>
+            <widget class="QWidget" name="widget_2" native="true">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+               <horstretch>0</horstretch>
+               <verstretch>0</verstretch>
+              </sizepolicy>
+             </property>
+             <layout class="QHBoxLayout" name="horizontalLayout_3">
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+              <item>
+               <widget class="QRadioButton" name="radioSingle">
+                <property name="text">
+                 <string>Single File Mode</string>
+                </property>
+                <property name="checked">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QRadioButton" name="radioCMake">
+                <property name="text">
+                 <string>CMake Build System Mode</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <spacer name="horizontalSpacer_5">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>40</width>
+                  <height>20</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
             <widget class="QWidget" name="boxCMake" native="true">
              <property name="sizePolicy">
               <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
@@ -105,29 +159,9 @@
              </layout>
             </widget>
            </item>
-           <item row="2" column="1">
-            <widget class="QLineEdit" name="editSrcFile">
-             <property name="text">
-              <string>examples/lru_cache/lru_cache.h</string>
-             </property>
-            </widget>
-           </item>
-           <item row="2" column="0">
-            <widget class="QLabel" name="labelSrcFile">
-             <property name="text">
-              <string>Source File</string>
-             </property>
-            </widget>
-           </item>
-           <item row="0" column="0" colspan="2">
-            <widget class="QWidget" name="widget_2" native="true">
-             <property name="sizePolicy">
-              <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
-               <horstretch>0</horstretch>
-               <verstretch>0</verstretch>
-              </sizepolicy>
-             </property>
-             <layout class="QHBoxLayout" name="horizontalLayout_3">
+           <item>
+            <widget class="QWidget" name="widget_10" native="true">
+             <layout class="QHBoxLayout" name="horizontalLayout_8">
               <property name="leftMargin">
                <number>0</number>
               </property>
@@ -141,34 +175,34 @@
                <number>0</number>
               </property>
               <item>
-               <widget class="QRadioButton" name="radioSingle">
+               <widget class="QLabel" name="labelSrcFile">
                 <property name="text">
-                 <string>Single File Mode</string>
+                 <string>Defintion File</string>
                 </property>
-                <property name="checked">
+               </widget>
+              </item>
+              <item>
+               <widget class="QComboBox" name="editSrcFile">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
+                <property name="editable">
                  <bool>true</bool>
                 </property>
+                <item>
+                 <property name="text">
+                  <string>examples/get_sign/get_sign.c</string>
+                 </property>
+                </item>
+                <item>
+                 <property name="text">
+                  <string>examples/lru_cache/lru_cache.h</string>
+                 </property>
+                </item>
                </widget>
-              </item>
-              <item>
-               <widget class="QRadioButton" name="radioCMake">
-                <property name="text">
-                 <string>CMake Build System Mode</string>
-                </property>
-               </widget>
-              </item>
-              <item>
-               <spacer name="horizontalSpacer_5">
-                <property name="orientation">
-                 <enum>Qt::Horizontal</enum>
-                </property>
-                <property name="sizeHint" stdset="0">
-                 <size>
-                  <width>40</width>
-                  <height>20</height>
-                 </size>
-                </property>
-               </spacer>
               </item>
              </layout>
             </widget>
@@ -366,6 +400,12 @@
               </item>
               <item>
                <widget class="QProgressBar" name="progressBar">
+                <property name="sizePolicy">
+                 <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                  <horstretch>0</horstretch>
+                  <verstretch>0</verstretch>
+                 </sizepolicy>
+                </property>
                 <property name="maximum">
                  <number>0</number>
                 </property>
@@ -532,10 +572,26 @@
                 </widget>
                </item>
                <item>
-                <widget class="QLineEdit" name="editTestFile">
-                 <property name="text">
-                  <string>examples/lru_cache/catch_test.cpp</string>
+                <widget class="QComboBox" name="editTestFile">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Expanding" vsizetype="Fixed">
+                   <horstretch>0</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
                  </property>
+                 <property name="editable">
+                  <bool>true</bool>
+                 </property>
+                 <item>
+                  <property name="text">
+                   <string>examples/get_sign/get_sign_test.cpp</string>
+                  </property>
+                 </item>
+                 <item>
+                  <property name="text">
+                   <string>examples/lru_cache/catch_test.cpp</string>
+                  </property>
+                 </item>
                 </widget>
                </item>
                <item>
