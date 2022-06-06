@@ -54,6 +54,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         self.btnStopKLEE.clicked.connect(self.stop_klee)
         self.radioDec.clicked.connect(lambda _: self.load_test_cases())
         self.radioHex.clicked.connect(lambda _: self.load_test_cases())
+        self.radioSingle.clicked.connect(lambda _: self.load_test_cases())
+        self.radioUnsigned.clicked.connect(lambda _: self.load_test_cases())
         self.btnTranslateCatch2.clicked.connect(self.translate_catch2_cases)
         self.progressBar.setVisible(False)
 
@@ -265,7 +267,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         for i, test_case in enumerate(test_cases):
             # self.tableTests.setItem(i, 0, QTableWidgetItem(""))  # empty test case name
             for val, data in test_case.items():
-                val_item = QTableWidgetItem(self.session.format_data(data, self.radioHex.isChecked()))
+                val_item = QTableWidgetItem(
+                    self.session.format_data(data, self.radioHex.isChecked(), self.radioUnsigned.isChecked()))
                 val_item.setTextAlignment(QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter)
                 self.tableTests.setItem(i, self.var_column[val], val_item)
 
@@ -276,7 +279,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             var_names = self.session.generate_klee_driver()
         except Exception as e:
             self.statusbar.showMessage("Fail to generate KLEE driver: {}".format(e))
-            self.save_test_file()  # revert changes
+            self.on_save_timer_timeout()  # revert changes
             return
         else:
             self.statusbar.showMessage("Successfully generated KLEE driver")
@@ -298,7 +301,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                                 f"-- KLEE output:\n")
         if clang_return_code != 0:
             self.statusbar.showMessage("Failed to compile KLEE driver")
-            self.save_test_file()  # revert changes
+            self.on_save_timer_timeout()  # revert changes
             self.reload_test_file()
             return
 
@@ -310,6 +313,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             return
         self.progressBar.setVisible(True)
         self.klee_fetch_timer.start()
+        self.btnStartKLEE.setEnabled(False)
         self.btnStopKLEE.setEnabled(True)
 
     def append_log(self, code: str) -> None:
@@ -337,6 +341,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             self.statusbar.showMessage(msg)
             self.btnTranslateCatch2.setEnabled(True)
             self.progressBar.setVisible(False)
+            self.btnStartKLEE.setEnabled(True)
+            self.btnStopKLEE.setEnabled(False)
 
     @QtCore.pyqtSlot()
     def stop_klee(self):

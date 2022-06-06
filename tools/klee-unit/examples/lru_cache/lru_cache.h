@@ -20,7 +20,7 @@ void cache_destroy(Cache *c);
 
 int cache_test(Cache *cache, uint32_t address);
 
-int cache_read_32(Cache *cache, uint32_t address, uint32_t *value_ptr);
+int cache_read_32(Cache *cache, uint32_t address, uint32_t *value);
 
 int cache_write_32(Cache *cache, uint32_t address, uint32_t value);
 

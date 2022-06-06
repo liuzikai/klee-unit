@@ -226,9 +226,9 @@ class KLEEUnitSession:
                 options = [ArgumentDriverType.SYMBOLIC]
                 if type(param.type.type) is c_ast.IdentifierType:
                     arg_type = _ArgumentType.ID
-                elif type(param.type.type) is c_ast.Struct:
-                    arg_type = _ArgumentType.STRUCT
-                    options.append(ArgumentDriverType.EXPANDED_STRUCT)
+                # elif type(param.type.type) is c_ast.Struct:
+                #     arg_type = _ArgumentType.STRUCT
+                #     options.append(ArgumentDriverType.EXPANDED_STRUCT)
                 else:
                     raise RuntimeError("Unsupported argument subtype: {}".format(param.type.type))
             elif type(param.type) is c_ast.ArrayDecl:
@@ -713,7 +713,7 @@ class KLEEUnitSession:
     def get_all_klee_test_cases(self) -> list[dict]:
         return self._test_cases
 
-    def format_data(self, data: bytes, in_hex: bool) -> str:
+    def format_data(self, data: bytes, in_hex: bool, unsigned: bool) -> str:
         """
         Format the data in hexadecimal.
         """
@@ -723,7 +723,12 @@ class KLEEUnitSession:
             4: 'i',
             8: 'q'
         }
-        value = struct.unpack(UNPACK_FORMAT[len(data)], data)[0]
+        f = UNPACK_FORMAT[len(data)]
+        if unsigned:
+            f = f.upper()
+        else:
+            f = f.lower()
+        value = struct.unpack(f, data)[0]
         if in_hex:
             return hex(value)
         else:
@@ -762,7 +767,7 @@ class KLEEUnitSession:
             assert len(e.args.exprs) == 1
 
             # Rewrite the function call
-            e.name.name = "ASSERT"
+            e.name.name = "CHECK"
             ret = [e]
         else:
             ret = [e]
@@ -782,33 +787,3 @@ class KLEEUnitSession:
         with open(self._test_file, "a", encoding="utf-8") as f:
             f.write('\nTEST_CASE("' + name + '")\n')
             f.write(self._generator.visit(compound))
-
-
-if __name__ == '__main__':
-    session = KLEEUnitSession()
-    # session.set_src_file("/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/tools/klee-unit/examples/lru_cache/cache.h")
-    session.set_src_file(
-        "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/tools/klee-unit/examples/get_sign/get_sign.c")
-
-    session.set_test_file(
-        "/Users/liuzikai/Documents/Courses/AST/AST-Project/ast-klee/tools/klee-unit/examples/lru_cache/cache_foo_unit.cpp")
-    funcs = session.analyze_src()
-    print("Functions:", ", ".join(funcs.keys()))
-
-    session.analyze_func("get_sign")
-
-    print("Generate test driver...")
-    session.set_arg_option("x", ArgumentDriverType.SYMBOLIC)
-    session.generate_test_driver()
-
-    print("Press any key to continue...")
-    input()
-
-    print(session.generate_klee_driver())
-
-
-    def add_test_case(index, values):
-        print(f"Test case {index}: {', '.join(values)}")
-
-
-    session.start_klee(add_test_case)

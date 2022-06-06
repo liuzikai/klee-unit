@@ -7,7 +7,7 @@ extern "C" {
 
 #include <stdint.h>
 
-#define RECORD_COUNT 64
+#define RECORD_COUNT 256
 
 extern int expected_read_count;
 extern uint32_t expected_read_ret[RECORD_COUNT];
